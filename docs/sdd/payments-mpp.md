@@ -8,8 +8,8 @@ Registro de todas las fases del SDD para leer de corrido. Fuente de requisitos: 
 | 2. Propuesta | Cerrada | 2026-09-15 |
 | 3. Especificación | Cerrada | 2026-09-15 |
 | 4. Diseño | Cerrada | 2026-09-15 |
-| 5. Tareas | Pendiente | |
-| 6. Implementación | Pendiente | |
+| 5. Tareas | Cerrada | 2026-09-15 |
+| 6. Implementación | En curso | 2026-09-15 |
 | 7. Verificación | Pendiente | |
 
 ## 1. Exploración (2026-09-15)
@@ -1198,3 +1198,452 @@ Cuatro spikes, 30 minutos cada uno, todos el martes 16 antes de escribir código
 ### 4.10 Fuera de alcance del diseño
 
 No se diseñan acá, y ninguna decisión de arriba depende de ellos: medición de bytes, gateway y conectividad, administración de usuarios, carga de saldo y cualquier UI (§16). Tampoco: mainnet y fondos reales; x402 (cambio de SDD aparte); más de una instancia del servidor y el lock distribuido que eso exigiría; base de datos y consultas sobre el histórico de vales; múltiples canales simultáneos por usuario; gestión de claves multi-tenant, HSM o rotación; stack de métricas y tracing más allá de líneas JSON a stdout; tests de integración automatizados contra testnet; listas de precios firmadas o tarifas dinámicas; y recuperar fondos cuando el funder perdió la trustline, que se detecta y se alarma pero no se resuelve.
+
+## 5. Tareas (2026-09-15)
+
+Plan ejecutable derivado de `docs/sdd/payments-mpp.md` §2-§4 y de `docs/payments-sdd.md` §13-§14. Hoy es 2026-09-15; el escalón 1 vence el miércoles 17, el escalón 2 el lunes 22.
+
+### Cómo leer esta sección
+
+- **Id de tarea** `T<wu>.<n>`: `wu` es el work unit (WU0-WU9, orden de ejecución), `n` el orden dentro del work unit.
+- **Ejecutor** — `agente`: una IA de código lo resuelve sin secretos reales ni testnet (scaffolding, schemas, persistencia, endpoints, middleware fail-closed, `node:test`, docs). `humano`: necesita keypairs de testnet, fondeo XLM, trustline USDC, el faucet, un deploy real, o verificar el Node de una máquina física del equipo. `pareja`: exige acuerdo explícito con el compañero del gateway.
+- **Checkbox** `- [ ]`: se marca `[x]` solo cuando `Cumple` y `Pruebas` están verificados, nunca antes.
+- **Cumple**: ids de `docs/sdd/payments-mpp.md` §3 (`S1-R#`, `VE-R#`, `AC-R#`, `VP-R#`, `FC-R#`, `CL-R#`, `FT-R#`, `EV-R#`, `CF-R#`) o, si la tarea es infraestructura sin requisito de spec directo, la decisión/riesgo de §2 que resuelve.
+- **Compuerta de escalón (no negociable)**: ninguna tarea de WU6 o WU7 (escalón 2) empieza antes de que un humano marque **T8.2** — hash de escalón 1 en el explorador, S1-R7.
+- Los pins exactos de dependencias (incluido `viem@2.56.5`) y `zod` explícito viven en `package.json`; ver diseño §4.4.
+
+### WU0 — Scaffolding
+
+Commit: `feat: scaffold payments-mpp package with pinned dependencies` · Líneas estimadas: 225
+
+- [x] **T0.1** — `package.json` + `tsconfig.json` + `.gitignore`
+  - Ejecutor: agente
+  - Archivos: package.json, tsconfig.json, .gitignore
+  - Cumple: R4, R9 (propuesta 2.5); D1, D2 (diseño 4.1, 4.6) — pins exactos `@stellar/mpp@0.7.1`, `@stellar/stellar-sdk@15.1.0`, `mppx@0.6.29`, `viem@2.56.5`, `zod@4.4.3`; `"type":"module"`, `engines.node >=22.18`, `erasableSyntaxOnly`
+  - Pruebas: `npm run check` sin errores sobre un archivo vacío
+  - Depende de: —
+  - Líneas estimadas: 50
+- [x] **T0.2** — `.env.example` completo
+  - Ejecutor: agente
+  - Archivos: .env.example
+  - Cumple: CF-R1, CF-R3; tabla 3.9 y 4.4 (shared + server + agent)
+  - Pruebas: revisión manual — cada variable de las tablas 3.9/4.4 está presente y comentada
+  - Depende de: T0.1
+  - Líneas estimadas: 45
+- [x] **T0.3** — `scripts/verify-deps.mjs` + README de arranque
+  - Ejecutor: agente
+  - Archivos: scripts/verify-deps.mjs, README.md
+  - Cumple: R4 (mitigación duplicado de peers); onboarding de D1
+  - Pruebas: node:test que mockea `execFileSync` con salida duplicada (falla) y con una sola versión (pasa)
+  - Depende de: T0.1
+  - Líneas estimadas: 110
+- [x] **T0.4** — Primer `node:test` verde
+  - Ejecutor: agente
+  - Archivos: src/shared/\_smoke.test.ts
+  - Cumple: base de D9 (~20 tests unitarios)
+  - Pruebas: `npm test` ejecuta y pasa al menos un caso
+  - Depende de: T0.1, T0.2
+  - Líneas estimadas: 20
+- [ ] **T0.5** — Congelar acuerdos con el gateway
+  - Ejecutor: pareja
+  - Archivos: .env.example (valores acordados), docs/payments-sdd.md §7
+  - Cumple: preguntas abiertas 2.7 (#1 `refund_waiting_period`, #2 canal reutilizado, #3 `PRICE_PER_MIB_RAW`, #4 canal de eventos, #5 agent como proceso separado)
+  - Pruebas: valor y dueño de `PRICE_PER_MIB_RAW` y `MAX_DELTA_PER_REQUEST` escritos en ambos `.env`
+  - Depende de: T0.2
+  - Líneas estimadas: 0 (sin diff de código)
+- [ ] **T0.6** — Node y `verify:deps` en las máquinas del equipo
+  - Ejecutor: humano
+  - Archivos: — (verificación de entorno)
+  - Cumple: R4, R9; verificación día 1 de §13
+  - Pruebas: `node --version` >=22.18 en las tres máquinas (o fallback `--experimental-strip-types`); `npm run verify:deps` sin duplicados
+  - Depende de: T0.1, T0.3
+  - Líneas estimadas: 0
+
+### WU1 — Shared
+
+Commit: `feat(shared): add pricing math, message schemas, and reason taxonomy` · Líneas estimadas: 345
+
+- [x] **T1.1** — `shared/money.ts` (`ceilDiv` BigInt)
+  - Ejecutor: agente
+  - Archivos: src/shared/money.ts, src/shared/money.test.ts
+  - Cumple: AC-R2, AC-R4, AC-R5, AC-R6, S1-R5
+  - Pruebas: `ceilDiv(0)=0n`; `ceilDiv(1048576)=PRICE`; `ceilDiv(1048577)=PRICE+1n`; valor por encima de `MAX_SAFE_INTEGER` exacto en BigInt; monotonía; error total de sesión ≤1 raw unit
+  - Depende de: T0.1
+  - Líneas estimadas: 45
+- [x] **T1.2** — `shared/messages.ts` (schemas zod M1/M2)
+  - Ejecutor: agente
+  - Archivos: src/shared/messages.ts, src/shared/messages.test.ts
+  - Cumple: VE-R2, VE-R3, VE-R4, VE-R5, VE-R7, VE-R8
+  - Pruebas: acepta canónico; rechaza campo faltante, `cumulativeAmount` numérico, `cumulativeAmount` decimal `"0.0125"`, `cumulativeBytes` negativo, `network` desconocida, `channel` de largo inválido
+  - Depende de: T0.1
+  - Líneas estimadas: 100
+- [x] **T1.3** — `shared/reasons.ts` + `shared/events.ts`
+  - Ejecutor: agente
+  - Archivos: src/shared/reasons.ts, src/shared/events.ts, src/shared/reasons.test.ts
+  - Cumple: FT-R1, FT-R5, FT-R6, EV-R1, EV-R2, EV-R3
+  - Pruebas: toda clave de `REASONS` cae en {200,503}; todo 503 es `retryable:true`, todo 200 es `retryable:false`; `emit()` escribe una línea JSON válida a stdout
+  - Depende de: T0.1
+  - Líneas estimadas: 90
+- [x] **T1.4** — `shared/retry.ts` + `shared/stellar/*` (validadores de formato)
+  - Ejecutor: agente
+  - Archivos: src/shared/retry.ts, src/shared/stellar/network.ts, src/shared/stellar/keys.ts, src/shared/stellar/trustline.ts, src/shared/stellar/explorer.ts
+  - Cumple: FT-R3; helpers usados luego por FC-R3, CL-R9
+  - Pruebas: backoff con `RETRY_MAX_ATTEMPTS=4`, delay acotado a `RETRY_MAX_DELAY_MS`; valida G/C/S de 56 chars, hex 64/128; arma `explorerUrl`
+  - Depende de: T0.1
+  - Líneas estimadas: 110
+
+### WU2 — Persistencia
+
+Commit: `feat(persistence): add append-only voucher log and event cursor` · Líneas estimadas: 180
+
+- [x] **T2.1** — `persistence/voucher-log.ts`
+  - Ejecutor: agente
+  - Archivos: src/persistence/voucher-log.ts, src/persistence/voucher-log.test.ts
+  - Cumple: VP-R1, VP-R2, VP-R3, VP-R4, VP-R5, VP-R6, VP-R7, VP-R8
+  - Pruebas: 3 appends → reapertura → máximo recuperado; última línea corrupta → WARN, se trunca, se conserva la anterior; línea corrupta en el medio → `unavailable` con `voucher_log_corrupt`; usa `fs.mkdtempSync` real, sin mocks de fs
+  - Depende de: T1.2, T1.3
+  - Líneas estimadas: 130
+- [x] **T2.2** — `persistence/cursor.ts`
+  - Ejecutor: agente
+  - Archivos: src/persistence/cursor.ts, src/persistence/cursor.test.ts
+  - Cumple: soporte de CL-R6 (cursor persistido); patrón `.tmp` + `fsync` + `rename`
+  - Pruebas: escritura atómica; lectura tras crash simulado a mitad de escritura conserva el valor anterior
+  - Depende de: T1.1
+  - Líneas estimadas: 50
+
+### WU3 — Escalón 1: charge server + cliente headless
+
+Commit: `feat(stage1): add 402 charge server and headless agent client` · Líneas estimadas: 380
+
+- [ ] **T3.1** — `config/env.ts` (schemas por rol)
+  - Ejecutor: agente
+  - Archivos: src/config/env.ts, src/config/env.test.ts
+  - Cumple: CF-R1, CF-R2, FC-R3; tabla 3.9/4.4
+  - Pruebas: parsea env válido; rechaza `CHANNEL_CONTRACT`/`COMMITMENT_PUBKEY`/`STELLAR_RECIPIENT` malformados
+  - Depende de: T1.4
+  - Líneas estimadas: 90
+- [ ] **T3.2** — `server/app.ts` + `routes/charge.ts` + `server/charge-service.ts`
+  - Ejecutor: agente
+  - Archivos: src/server/app.ts, src/server/routes/charge.ts, src/server/charge-service.ts
+  - Cumple: S1-R1, S1-R2, S1-R4, S1-R6
+  - Pruebas: 402 sin credencial (mock de `ChargePort`); `payment:{txHash,explorerUrl,network}` en 200; envelope `unsigned` con `reason`/`retryable` cuando falla
+  - Depende de: T3.1, T1.1, T1.3
+  - Líneas estimadas: 140
+- [ ] **T3.3** — `agent/app.ts` + `agent/charge-client.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/app.ts, src/agent/charge-client.ts
+  - Cumple: S1-R2, S1-R3
+  - Pruebas: modo pull con `ChargePort` fake; balance XLM del agent no se toca en el fake
+  - Depende de: T3.1
+  - Líneas estimadas: 90
+- [ ] **T3.4** — `scripts/preflight.ts` (código)
+  - Ejecutor: agente
+  - Archivos: scripts/preflight.ts
+  - Cumple: R1 (mitigación, propuesta 2.5), CL-R12
+  - Pruebas: node:test con `TrustlinePort` fake que reporta falta de trustline en una de las dos cuentas → WARN, no bloquea
+  - Depende de: T1.4
+  - Líneas estimadas: 60
+
+### WU4 — Fail-closed, `/ready` y eventos
+
+Commit: `feat: add fail-closed boot, readiness middleware, and webhook events` · Líneas estimadas: 240
+
+- [ ] **T4.1** — `config/boot.ts` + `requireReady` + `routes/health.ts`
+  - Ejecutor: agente
+  - Archivos: src/config/boot.ts, src/server/middleware/require-ready.ts, src/server/routes/health.ts
+  - Cumple: FC-R1, FC-R2, FC-R4, FC-R5, FC-R6, FC-R7, FC-R8
+  - Pruebas: `listen()` ocurre antes de `buildInstance()`; RPC caído → `/health` 200, ruta de pago 503 con `Retry-After:5`; reintento acotado a `INIT_RETRY_INTERVAL_MS`
+  - Depende de: T3.1, T3.2
+  - Líneas estimadas: 110
+- [ ] **T4.2** — `events/emit.ts` (webhook)
+  - Ejecutor: agente
+  - Archivos: src/shared/events.ts (extensión), src/shared/events.test.ts
+  - Cumple: EV-R4, EV-R5, EV-R6
+  - Pruebas: `BACKEND_EVENTS_URL` definido → POST con timeout 2s, hasta 3 reintentos, cola acotada; webhook caído no afecta el pago
+  - Depende de: T1.3, T1.4
+  - Líneas estimadas: 70
+- [ ] **T4.3** — Tests de escenarios fail-closed
+  - Ejecutor: agente
+  - Archivos: src/config/boot.test.ts
+  - Cumple: escenarios 3.5 (RPC caído al arrancar, recuperación sin reinicio, diagnóstico en diez segundos)
+  - Pruebas: `COMMITMENT_PUBKEY` malformado → `/ready` nombra la variable sin exponer secretos
+  - Depende de: T4.1
+  - Líneas estimadas: 60
+
+### WU5 — `POST /vouchers` (escalón 1.5, contra consumo simulado)
+
+Commit: `feat(agent): add POST /vouchers with idempotency and mutex coalescing` · Líneas estimadas: 275
+
+- [ ] **T5.1** — `agent/mutex.ts` (`withChannelLock`)
+  - Ejecutor: agente
+  - Archivos: src/agent/mutex.ts, src/agent/mutex.test.ts
+  - Cumple: VE-R12
+  - Pruebas: dos llamadas concurrentes al mismo canal se serializan; canales distintos no se bloquean entre sí
+  - Depende de: T0.1
+  - Líneas estimadas: 40
+- [ ] **T5.2** — `agent/guardrails.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/guardrails.ts, src/agent/guardrails.test.ts
+  - Cumple: AC-R2, AC-R3, AC-R7
+  - Pruebas: recálculo exacto vs `cumulativeAmount` recibido → `amount_rejected` si difiere; delta > `MAX_DELTA_PER_REQUEST_RAW` → `amount_rejected`
+  - Depende de: T1.1
+  - Líneas estimadas: 55
+- [ ] **T5.3** — `agent/routes` `POST /vouchers`
+  - Ejecutor: agente
+  - Archivos: src/agent/app.ts (ruta), src/agent/routes/vouchers.ts
+  - Cumple: VE-R1, VE-R2, VE-R6, VE-R9, VE-R10, VE-R11, VE-R13
+  - Pruebas: `X-Gateway-Token` ausente/incorrecto → 401; igual → `reused:true`; mayor → vale nuevo; menor → `stale_reading`
+  - Depende de: T1.2, T5.1, T5.2
+  - Líneas estimadas: 130
+- [ ] **T5.4** — Tests de concurrencia y coalescencia
+  - Ejecutor: agente
+  - Archivos: src/agent/routes/vouchers.test.ts
+  - Cumple: escenario 3.2 "dos lecturas concurrentes del mismo canal"; coalescencia de 4.3
+  - Pruebas: N pedidos concurrentes del mismo canal → una sola firma, el mayor de la cola, el resto `reused:true`
+  - Depende de: T5.3
+  - Líneas estimadas: 50
+
+### WU6 — Escalón 2: apertura, recarga y firma de vales
+
+Commit: `feat(stage2): add channel open/top-up CLI, commitment signing, and server verification` · Líneas estimadas: 415
+
+- [ ] **T6.1** — `cli/open-channel.ts` + `cli/top-up.ts`
+  - Ejecutor: agente
+  - Archivos: src/cli/open-channel.ts, src/cli/top-up.ts
+  - Cumple: CL-R1, CL-R2
+  - Pruebas: `ChannelPort` fake — `__constructor`/`top_up` invocados con los argumentos correctos; escribe `data/channel-{network}.json`
+  - Depende de: T3.1, T1.4
+  - Líneas estimadas: 100
+- [ ] **T6.2** — `agent/signer.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/signer.ts, src/agent/signer.test.ts
+  - Cumple: formato de firma del commitment map (4.3), determinismo ed25519 (RFC 8032)
+  - Pruebas: mismo `amount` firmado dos veces produce la misma firma
+  - Depende de: T0.1
+  - Líneas estimadas: 55
+- [ ] **T6.3** — `agent/channel-cache.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/channel-cache.ts
+  - Cumple: CL-R4, 2.3.5 (el agent corta primero con `depositedRaw` cacheado)
+  - Pruebas: `RpcPort` fake — agotamiento local antes de firmar cuando el acumulado supera el depósito cacheado
+  - Depende de: T1.4
+  - Líneas estimadas: 70
+- [ ] **T6.4** — `server/routes/channel.ts` + `server/channel-service.ts` (verificación)
+  - Ejecutor: agente
+  - Archivos: src/server/routes/channel.ts, src/server/channel-service.ts
+  - Cumple: CL-R4, VP-R1, VP-R2, VP-R3
+  - Pruebas: simulación `prepare_commitment` (fake) + verificación ed25519 + append/fsync antes del 200
+  - Depende de: T2.1, T6.2
+  - Líneas estimadas: 120
+- [ ] **T6.5** — Tests firma/agotamiento/persistencia
+  - Ejecutor: agente
+  - Archivos: src/server/channel-service.test.ts
+  - Cumple: escenario "canal agotado" 3.6; VP-R4
+  - Pruebas: firma inválida rechazada; `channel_exhausted` con depósito agotado; reinicio recupera el acumulado del JSONL
+  - Depende de: T6.4
+  - Líneas estimadas: 70
+
+### WU7 — Escalón 2: settle, monitor de `close_start` y cierre
+
+Commit: `feat(stage2): add settle scheduler, close-start monitor, and channel close flow` · Líneas estimadas: 430
+
+- [ ] **T7.1** — `server/settle-scheduler.ts`
+  - Ejecutor: agente
+  - Archivos: src/server/settle-scheduler.ts
+  - Cumple: CL-R5
+  - Pruebas: `unsettledRaw * 10000 >= SETTLE_THRESHOLD_BPS * depositedRaw` dispara `settle` dentro del mutex del canal, solo si `inFlight==="none"`
+  - Depende de: T6.4
+  - Líneas estimadas: 60
+- [ ] **T7.2** — `server/close-monitor.ts`
+  - Ejecutor: agente
+  - Archivos: src/server/close-monitor.ts, src/persistence/cursor.ts (uso)
+  - Cumple: CL-R6, CL-R7 (fallback), CL-R8
+  - Pruebas: poll `getEvents` fake con cursor persistido; invariante `balance == deposited - withdrawn` detecta `refund_raced`
+  - Depende de: T2.2, T7.1
+  - Líneas estimadas: 100
+- [ ] **T7.3** — `server/channel-service.ts::closeChannel`
+  - Ejecutor: agente
+  - Archivos: src/server/channel-service.ts (extensión)
+  - Cumple: CL-R9, CL-R10, CL-R11
+  - Pruebas: sin trustline del funder → no cierra, `settle` + `funder_trustline_missing`; balance post-cierre no coincide → `refund_not_received`
+  - Depende de: T7.2, T1.4
+  - Líneas estimadas: 110
+- [ ] **T7.4** — `cli/close-start.ts` + `cli/refund.ts`
+  - Ejecutor: agente
+  - Archivos: src/cli/close-start.ts, src/cli/refund.ts
+  - Cumple: 2.3.5 (válvula de escape del funder); R13 (mitigación, cuenta en ledgers)
+  - Pruebas: cuenta regresiva basada en `getLatestLedger` (fake), no en segundos
+  - Depende de: T6.1
+  - Líneas estimadas: 70
+- [ ] **T7.5** — Tests de cierre, settle y trustline
+  - Ejecutor: agente
+  - Archivos: src/server/channel-service.test.ts (extensión)
+  - Cumple: escenarios 3.6 (cierre con devolución, funder sin trustline, salida unilateral)
+  - Pruebas: cierre exitoso reparte `settledRaw`/`refundedRaw` correctamente; `close_start` detectado → `channel_closing` en la siguiente lectura
+  - Depende de: T7.3
+  - Líneas estimadas: 90
+
+### WU8 — Verificación humana en testnet (§14)
+
+Commit: `docs: record testnet verification evidence for stage 1 and stage 2` · Líneas estimadas: 0 (evidencia, no código)
+
+- [ ] **T8.1** — §14.1-2: servidor listo y cuentas listas
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.1, §14.2; criterio de éxito Escalón 0
+  - Pruebas: salida de `curl -i` con 402; salida de `npm run preflight` con trustline en ambas cuentas
+  - Depende de: T3.2, T3.4, T0.6
+  - Líneas estimadas: 0
+- [ ] **T8.2** — §14.3: un cobro suelto (compuerta de escalón 1)
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: S1-R7 (cierre de escalón 1), §14.3 — **compuerta dura para WU6/WU7**
+  - Pruebas: hash de transacción visible en el explorador; `charge.settled` en stdout; balance XLM del agent sin cambios
+  - Depende de: T8.1
+  - Líneas estimadas: 0
+- [ ] **T8.3** — §14.4: cobros repetidos contra consumo simulado
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.4; escenario 3.1 "cobros repetidos"
+  - Pruebas: serie de hashes; suma de cobros igual a `cumulative(N)` con error ≤1 raw unit
+  - Depende de: T8.2
+  - Líneas estimadas: 0
+- [ ] **T8.4** — §14.5-6: canal abierto, depositado, N vales firmados
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia, §7 pregunta 4)
+  - Cumple: §14.5, §14.6; criterio de éxito Escalón 2 (parcial); spike S1 (costo real anotado)
+  - Pruebas: hash + `CHANNEL_CONTRACT` en el explorador; N líneas en el JSONL y cero actividad on-chain durante la ventana de consumo
+  - Depende de: T6.4, T8.2
+  - Líneas estimadas: 0
+- [ ] **T8.5** — §14.7-8: agotamiento y reinicio a mitad de sesión
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.7, §14.8; FT-R4, VP-R4
+  - Pruebas: M2 con `channel_exhausted`, sin tormenta de reintentos; server reiniciado recupera el acumulado máximo del JSONL real
+  - Depende de: T8.4
+  - Líneas estimadas: 0
+- [ ] **T8.6** — §14.9-10: cierre con devolución y salida unilateral
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.9, §14.10; CL-R11; spike S2 confirmado o fallback CL-R7 aplicado; spike S4 (top_up tras close_start)
+  - Pruebas: hash de `close` + delta de balance del funder verificado; hash de `close_start` y de `refund`
+  - Depende de: T7.5, T8.5
+  - Líneas estimadas: 0
+
+### WU9 — Pulido y backlog
+
+Commit: `chore: polish docs, backlog notes, and remaining test coverage` · Líneas estimadas: 80
+
+- [ ] **T9.1** — Backlog y troubleshooting en README
+  - Ejecutor: agente
+  - Archivos: README.md (sección backlog)
+  - Cumple: D10 (fee payer = recipient, atajo conocido), R14 (Windows)
+  - Pruebas: n/a, revisión de lectura
+  - Depende de: T0.3
+  - Líneas estimadas: 40
+- [ ] **T9.2** — Completar cobertura de `node:test`
+  - Ejecutor: agente
+  - Archivos: src/**/*.test.ts (gaps)
+  - Cumple: D9 (tabla 4.7, ~20 tests)
+  - Pruebas: cada fila de la tabla 4.7 tiene al menos un `node:test` asociado
+  - Depende de: T7.5
+  - Líneas estimadas: 40
+- [ ] **T9.3** — Cerrar preguntas abiertas restantes
+  - Ejecutor: pareja
+  - Archivos: docs/sdd/payments-mpp.md (§2.7)
+  - Cumple: preguntas abiertas 2.7 no resueltas en T0.5 (p. ej. #6 x402)
+  - Pruebas: cada pregunta marcada como confirmada o descartada
+  - Depende de: T0.5
+  - Líneas estimadas: 0
+- [ ] **T9.4** — Ensayo completo de Demo Day
+  - Ejecutor: humano
+  - Archivos: — (ensayo)
+  - Cumple: criterios de éxito generales (2.6)
+  - Pruebas: guion de punta a punta corrido una vez más; hashes y capturas siguen vigentes
+  - Depende de: T8.6
+  - Líneas estimadas: 0
+
+### Spikes de día 1
+
+Los cuatro corren el martes 16, 30 minutos cada uno, antes de escribir código de producto (S2 y S3 primero: cambian código que si no se escribe dos veces).
+
+| # | Spike | Ejecutor | Cómo responderla | Bloquea |
+|---|---|---|---|---|
+| S1 | Costo de desplegar y fondear un canal | humano — requiere fees reales de testnet, no hay atajo offline | Desplegar un canal descartable con 1 USDC; leer XLM del funder antes/después y `feeCharged` | Nada de código (D6 ya fija canal reutilizable); alimenta la evidencia de T8.4 y §7 pregunta 4 |
+| S2 | Topics/campos de `close_start` vía `getEvents` | humano — la ejecución real es obligatoria; el agente puede adelantar terreno leyendo el código fuente del contrato `one-way-channel` para una hipótesis de topics antes del spike | `close_start` en un canal descartable + `getEvents` filtrado, imprimiendo topics en XDR | Finaliza la constante `CLOSE_START_EVENT_TOPICS` de T7.2 y la elección CL-R6 vs CL-R7 en T7.1/T7.3; T7.2 se escribe igual con clasificación por candidatos como diseño ya prevé |
+| S3 | Dónde aparece el `txHash` del escalón 1 | agente puede pre-resolverlo leyendo los tipos publicados de `@stellar/mpp` en `node_modules` tras el `npm install` de T0.6 (sin red Soroban); la confirmación empírica final es humana | `JSON.stringify` sobre el resultado del charge, el `Store` y los headers; fallback: hash del sobre firmado o `getEvents` del transfer SEP-41 | Cierra el detalle exacto de T3.2 (el diseño ya deja dos fallbacks documentados, no bloquea escribir el código) |
+| S4 | ¿Acepta `top_up` después de `close_start`? | humano — simula contra un canal descartable ya cerrado (`close_start` llamado); el agente puede leer el contrato Rust del `one-way-channel` para una hipótesis del `require!` sin ejecutar nada | Simular `top_up` sobre el canal de S2 y leer el error de simulación | Solo una línea del runbook en T6.1/T6.3 ("`channel_closing` es terminal, abrir uno nuevo"); no bloquea la implementación |
+
+### Review Workload Forecast
+
+- Estimated changed lines (agente tasks only): ~2570
+- 400-line budget risk: High
+- Chained PRs recommended: Yes
+  - PR1 — WU0 scaffolding (~225 líneas), sin dependencias
+  - PR2 — WU1 shared (~345), depende de PR1
+  - PR3 — WU2 persistencia (~180), depende de PR1
+  - PR4 — WU3 escalón 1 charge server + cliente (~380), depende de PR2, PR3
+  - PR5 — WU4 fail-closed + `/ready` + eventos (~240), depende de PR2, PR4
+  - PR6 — WU5 `POST /vouchers` escalón 1.5 (~275), depende de PR2, PR5 — fin del primer lote
+  - PR7 — WU6a CLI de canal + signer (~155), depende de PR6 y de la compuerta T8.2
+  - PR8 — WU6b channel-cache + verificación server (~260), depende de PR7
+  - PR9 — WU7a settle-scheduler + close-monitor (~160), depende de PR8
+  - PR10 — WU7b closeChannel + CLI de salida unilateral (~270), depende de PR9
+  - PR11 — WU9 pulido (~80), depende de PR10 y de toda la evidencia de WU8
+- Decision needed before apply: Yes — el total (~2570 líneas agente) equivale a 6-11 PRs de a ≤400 líneas repartidos en 8 días; incluso el primer lote (stage 1 + 1.5, PR1-PR6) suma ~1645 líneas. Se necesita confirmar la estrategia de entrega (`ask-on-risk` / `auto-chain` / `single-pr` / `exception-ok`) antes de que `sdd-apply` arranque, para saber si cada PRx de la lista se abre por separado o si se acumulan commits de trabajo en `feat/payments-mpp` y se abre un solo PR-tracker a `main` al final del escalón 2.
+
+### Primer lote para apply
+
+Orden: `T0.1, T0.2, T0.3, T0.4, T1.1, T1.2, T1.3, T1.4, T2.1, T2.2, T3.1, T3.2, T3.3, T3.4, T4.1, T4.2, T4.3, T5.1, T5.2, T5.3, T5.4`.
+
+Todas `agente`, todas sin acceso a testnet real (usan los puertos `ChannelPort`/`RpcPort`/`ChargePort`/`TrustlinePort` con fakes, según 4.1). Cubren escalón 1 completo y escalón 1.5 (`POST /vouchers` contra consumo simulado).
+
+**Condición de corte**: detenerse después de T5.4. No tocar T0.5 ni T0.6 (requieren al compañero del gateway y ejecución real) ni ninguna tarea de WU6/WU7 (escalón 2) hasta que un humano marque **T8.2** — hash de escalón 1 verificado en el explorador. Si T8.2 no está cerrado el jueves 17, avisar al equipo ese mismo día (§13/§15), no el viernes.
+
+## 6. Implementación
+
+### Lote A — WU0, WU1, WU2 (2026-09-15)
+
+Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a testnet real. Cubre exactamente `T0.1, T0.2, T0.3, T0.4, T1.1, T1.2, T1.3, T1.4, T2.1, T2.2` — se corta ahí a propósito: son las tres primeras cadenas de PR del *Review Workload Forecast* de §5 (`PR1` scaffolding, `PR2` shared, `PR3` persistencia), entregadas como commits de trabajo sobre `feat/payments-mpp` en vez de tres PRs separados, porque el foco de este lote es dejar la base común lista para que WU3 (escalón 1) pueda apoyarse en ella. No se tocó `T0.5` ni `T0.6` (requieren al compañero del gateway y verificación humana de entorno) ni ninguna tarea de WU3 en adelante.
+
+**WU0 — Scaffolding.** `package.json` con los pines exactos del diseño (`@stellar/mpp@0.7.1`, `@stellar/stellar-sdk@15.1.0`, `mppx@0.6.29`, `viem@2.56.5`), más `zod@4.6.5` (lo que resolvió `npm ls zod` después de instalar `@stellar/mpp`, dentro de su rango `^4.4.3`), `express@5.2.1`, `dotenv@17.4.2` y devDependencies (`typescript@5.9.3`, `@types/node@22.20.2`, `@types/express@5.0.6`). `tsconfig.json` con `erasableSyntaxOnly`, `verbatimModuleSyntax` y `allowImportingTsExtensions` tal como pide 4.6. `.env.example` con cada variable de las tablas 3.9 y 4.4, comentada. `scripts/verify-deps.mjs` (Node puro, sin dependencias) más `README.md` de arranque. Primer test verde en `src/shared/_smoke.test.ts`.
+
+**WU1 — Shared.** `shared/money.ts` (`ceilDiv` y `computeExpectedAmountRaw` en BigInt, más `computeChargeDeltaRaw` para el delta de escalón 1 — es la misma función de precio que pide S1-R5). `shared/messages.ts` con los schemas zod de mensaje 1 y mensaje 2 (`z.discriminatedUnion` por `status`). `shared/reasons.ts` (tabla `REASONS`, `PaymentError`, `retryableFor`/`statusFor`) y `shared/events.ts` (envelope + `emit()` a stdout; el webhook de `BACKEND_EVENTS_URL` queda para T4.2). `shared/retry.ts` (backoff con jitter completo, `RETRY_MAX_ATTEMPTS=4`, tope `RETRY_MAX_DELAY_MS=4000`) y `shared/stellar/{network,keys,trustline,explorer}.ts` (validadores de formato G/C/S y hex 64/128, passphrases de red, `buildExplorerUrl`; `trustline.ts` define el tipo `TrustlinePort` porque la verificación real necesita RPC y esa integración es de un work unit posterior).
+
+**WU2 — Persistencia.** `persistence/voucher-log.ts`: log JSONL append-only con `fs.writeSync` + `fs.fsyncSync` antes de responder, replay al abrir que reconstruye el índice por canal (el máximo, no el último), línea final corrupta → WARN + truncado + se sigue sirviendo, línea corrupta en el medio → `{status: "corrupt", reason: "voucher_log_corrupt"}`. `persistence/cursor.ts`: escritura atómica `.tmp` + `fsync` + `rename` para el cursor del monitor de eventos. Todos los tests de este work unit escriben en un directorio real creado con `fs.mkdtempSync`, sin mocks de `fs`, tal como exige 4.7.
+
+**Comandos ejecutados (resultado final, después de corregir el bug de test descrito abajo):**
+
+| Comando | Resultado |
+|---|---|
+| `npm install` | 149 paquetes, sin `--legacy-peer-deps` |
+| `npm run verify:deps` | `single resolved version for every pinned package` — cero duplicados de `@stellar/stellar-sdk` y `mppx`, no hizo falta `overrides` |
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 71/71 tests en verde (9 WU0 + 50 WU1 + 12 WU2) |
+
+**Commits:**
+
+- `8de759f` — `feat: scaffold payments-mpp package with pinned dependencies`
+- `20484be` — `feat(shared): add pricing math, message schemas, and reason taxonomy`
+- `f01f612` — `feat(persistence): add append-only voucher log and event cursor`
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`.gitattributes` nuevo** (`* text=auto eol=lf`): no estaba en el diseño. Git avisaba "LF will be replaced by CRLF" en Windows; se agregó en el commit de scaffolding para fijar finales de línea LF en el repo, evitando diffs ruidosos entre máquinas del equipo (coherente con R14).
+2. **`typescript`, `@types/node`, `@types/express` fijados en la última versión de la serie mayor que ya usaba el diseño (5.x / 22.x / 5.x), no en el último publicado en npm.** `npm view typescript version` devuelve `7.0.2`: TypeScript 7 es la reescritura en Go (compilador nativo), publicada después de escrito el diseño, y saltar dos versiones mayores en la primera semana de un proyecto que recién arranca con `erasableSyntaxOnly` (función de TS 5.8+) es un riesgo que nadie pidió. Se fijó `typescript@5.9.3` (la última 5.x), `@types/node@22.20.2` (última 22.x, coincide con `engines.node`) y `@types/express@5.0.6`. Verificado empíricamente: `erasableSyntaxOnly` funciona con `typescript@5.9.3`.
+3. **`.env.example` más completo que el bloque literal de la sección 4.4 del diseño.** El diseño muestra un `.env.example` de ejemplo que omite variables con default (`RPC_HEALTH_TIMEOUT_MS`, `CLOSE_MONITOR_LOOKBACK_LEDGERS`, `CLOSE_ASSERT_ATTEMPTS`, `CLOSE_ASSERT_INTERVAL_MS`, `INIT_RETRY_INTERVAL_MS`, `METER_REPORT_INTERVAL_MS`). La prueba de T0.2 pide explícitamente "cada variable de las tablas 3.9 y 4.4", así que se priorizó la tabla completa sobre el bloque de ejemplo del diseño, que era ilustrativo.
+4. **`MPP_SECRET_KEY` aparece con el mismo nombre en la tabla de variables de `server` y en la de `agent` (diseño 4.4).** Si los dos procesos corren desde el mismo `.env` en la misma carpeta — que es como está armado hoy el repo, sin `.env` separado por rol — `dotenv` solo se queda con el último valor y el otro proceso pierde su clave. Se dejó documentado en `.env.example` tal cual lo define el diseño porque resolverlo (¿nombres separados? ¿un `.env` por proceso?) es una decisión de `config/env.ts`, que es T3.1 y no está en este lote. **Punto abierto para quien tome T3.1.**
+5. **Glob de tests ampliado**: `"test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\""` en vez del literal `"node --test \"src/**/*.test.ts\""` del diseño. `scripts/verify-deps.mjs` es JS plano a propósito (4.4: nada de TS ahí para no depender del paso de chequeo en tooling), y su test (`verify-deps.test.mjs`) necesita ejecutarse igual. Sin este cambio, `npm test` nunca corre esa suite.
+6. **`ceilDiv` y el precio no exponen una única función `ceilDiv(bytes)` como sugiere la nota de lectura de tareas, sino `ceilDiv(numerador, denominador)` genérica más `computeExpectedAmountRaw(bytes, price)` que la usa.** Es fiel a AC-R2 (`ceilDiv(cumulativeBytes * PRICE_PER_MIB_RAW, 1048576n)`); se separó para poder testear `ceilDiv` con casos de borde propios sin atar cada caso a un precio fijo.
+7. **No se corrió `npm audit fix`.** `npm audit` reporta 4 vulnerabilidades "high" en `axios`/`toml`, transitivas de `@stellar/stellar-sdk@15.1.0`. El fix sugerido implica subir a `@stellar/stellar-sdk@17.1.0`, que rompe el pin exacto exigido por el diseño (D1/D2, R4) y por T0.1. Se deja sin tocar y registrado acá para que el equipo decida conscientemente si acepta el riesgo hasta que el pin se revise.
+
+**Descubrimientos no obvios** (guardados también en Engram, tipo `discovery`): TypeScript 7 ya está publicado como `latest` en npm (reescritura en Go); zod resuelve una única versión (`4.6.5`) en todo el árbol pese a que tres paquetes distintos lo declaran (`@stellar/mpp`, `mppx`, `viem` vía `abitype`); `npm ls <pkg> --all --json` en Windows necesita `shell: true` en `execFileSync` porque `npm` es un `.cmd`, no un binario nativo — sin eso, `verify-deps.mjs` fallaría en las máquinas del equipo aunque pasara en CI Linux.
+
+**Bug propio encontrado y corregido durante este lote:** el primer test de "excede `Number.MAX_SAFE_INTEGER`" en `money.test.ts` afirmaba que el *monto resultante* superaba `Number.MAX_SAFE_INTEGER` usando `cumulativeBytes = MAX_SAFE_INTEGER + 10n`, pero con `PRICE_PER_MIB_RAW = 10_000n` el monto resultante es ~86 veces más chico que los bytes de entrada, así que no lo superaba — el test estaba mal, no el código. Se corrigió calculando `hugeBytes` a partir del monto objetivo (`(MAX_SAFE_INTEGER * MIB) / PRICE + MIB`) para que el escenario de la spec ("monto derivado supera `Number.MAX_SAFE_INTEGER`") se cumpla de verdad.
+
+**Puntos abiertos para el próximo lote (WU3 en adelante):**
+
+- Resolver la colisión de `MPP_SECRET_KEY` entre `server` y `agent` en `config/env.ts` (T3.1) — ver desviación 4.
+- `T0.5` (acuerdos con el gateway) y `T0.6` (verificación de Node y `verify:deps` en las máquinas del equipo) siguen pendientes, son `pareja`/`humano` y no se tocaron.
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre `T8.2`.
+- Vulnerabilidades transitivas de `axios`/`toml` sin resolver (desviación 7) — decisión pendiente del equipo, no bloquea WU3-WU5.
