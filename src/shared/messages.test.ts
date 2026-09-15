@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildUnsigned,
   message1Schema,
   message2Schema,
   message2SignedSchema,
@@ -112,4 +113,55 @@ test("message2Schema discriminates signed vs unsigned by status", () => {
   assert.equal(message2Schema.safeParse(canonicalSigned).success, true);
   assert.equal(message2Schema.safeParse(canonicalUnsigned).success, true);
   assert.equal(message2Schema.safeParse({ ...canonicalSigned, status: "pending" }).success, false);
+});
+
+test("message2UnsignedSchema rejects retryable that disagrees with REASONS (review finding)", () => {
+  const mismatched = { ...canonicalUnsigned, reason: "channel_exhausted", retryable: true };
+  assert.equal(message2UnsignedSchema.safeParse(mismatched).success, false);
+});
+
+test("message2UnsignedSchema accepts retryable: true only for a retryable reason", () => {
+  const retryable = {
+    ...canonicalUnsigned,
+    reason: "upstream_unavailable",
+    retryable: true,
+    detail: "Soroban RPC unreachable",
+  };
+  assert.equal(message2UnsignedSchema.safeParse(retryable).success, true);
+});
+
+test("message2UnsignedSchema accepts null sessionId and meterReadingId (fail-closed, pre-body-parse)", () => {
+  const noBodyYet = { ...canonicalUnsigned, sessionId: null, meterReadingId: null };
+  assert.equal(message2UnsignedSchema.safeParse(noBodyYet).success, true);
+});
+
+test("message2UnsignedSchema rejects empty-string sessionId or meterReadingId — null only, never a placeholder", () => {
+  assert.equal(message2UnsignedSchema.safeParse({ ...canonicalUnsigned, sessionId: "" }).success, false);
+  assert.equal(
+    message2UnsignedSchema.safeParse({ ...canonicalUnsigned, meterReadingId: "" }).success,
+    false,
+  );
+});
+
+test("buildUnsigned derives retryable and HTTP status from REASONS, never from the caller", () => {
+  const { body, status } = buildUnsigned("channel_exhausted", {
+    sessionId: "sess_1",
+    channel: "C".padEnd(56, "A"),
+    remaining: "0",
+    meterReadingId: "mr_1",
+    detail: "deposit exhausted",
+  });
+  assert.equal(body.retryable, false);
+  assert.equal(status, 200);
+
+  const retryableCase = buildUnsigned("upstream_unavailable", {
+    sessionId: null,
+    meterReadingId: null,
+    detail: "Soroban RPC unreachable",
+  });
+  assert.equal(retryableCase.body.retryable, true);
+  assert.equal(retryableCase.status, 503);
+  assert.equal(retryableCase.body.sessionId, null);
+  assert.equal(retryableCase.body.meterReadingId, null);
+  assert.equal(retryableCase.body.remaining, "0");
 });

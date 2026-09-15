@@ -4,6 +4,7 @@
 // queue, no second endpoint.
 
 import { z } from "zod";
+import { isReason, retryableFor, statusFor, type Reason } from "./reasons.ts";
 
 const NETWORKS = ["stellar:testnet", "stellar:pubnet"] as const;
 
@@ -42,17 +43,9 @@ export const message1Schema = z.object({
 
 export type Message1 = z.infer<typeof message1Schema>;
 
-const reasonSchema = z.enum([
-  "channel_exhausted",
-  "channel_closing",
-  "channel_not_found",
-  "channel_not_open",
-  "stale_reading",
-  "amount_rejected",
-  "signer_unavailable",
-  "upstream_unavailable",
-  "internal_error",
-]);
+// Derived from `REASONS` (reasons.ts) instead of its own literal list, so the
+// two tables can never drift apart (review finding, Lote B).
+const reasonSchema = z.custom<Reason>(isReason, { message: "must be a reason known to REASONS" });
 
 /** Message 2, signed branch (VE-R7). */
 export const message2SignedSchema = z.object({
@@ -74,21 +67,70 @@ export const message2SignedSchema = z.object({
 
 export type Message2Signed = z.infer<typeof message2SignedSchema>;
 
-/** Message 2, unsigned branch (VE-R8). `retryable` is explicit — the
- * gateway must never derive it from `reason` (FT-R1). */
-export const message2UnsignedSchema = z.object({
-  version: z.literal(1),
-  status: z.literal("unsigned"),
-  sessionId: z.string().min(1),
-  channel: z.string().regex(CONTRACT_ID_RE).optional(),
-  reason: reasonSchema,
-  retryable: z.boolean(),
-  remaining: rawAmountSchema,
-  meterReadingId: z.string().min(1),
-  detail: z.string(),
-});
+/**
+ * Message 2, unsigned branch (VE-R8). `retryable` is explicit — the gateway
+ * must never derive it from `reason` (FT-R1) — and is cross-checked against
+ * the `REASONS` table by the `.refine` below, so a handler can never emit an
+ * envelope where the two disagree (review finding, Lote B).
+ *
+ * `sessionId` and `meterReadingId` are nullable, not just optional: the
+ * fail-closed middleware (`requireReady`, FC-R5) answers before any request
+ * body is parsed, and the M1 validation failure path (VE-R2) may have no
+ * usable body either. Both cases emit `null`, never `""` or a placeholder
+ * string like `"unknown"` — `null` is unambiguous, a placeholder string is
+ * not. The signed branch keeps both fields required: a signed voucher always
+ * has a real session and meter reading behind it.
+ */
+export const message2UnsignedSchema = z
+  .object({
+    version: z.literal(1),
+    status: z.literal("unsigned"),
+    sessionId: z.string().min(1).nullable(),
+    channel: z.string().regex(CONTRACT_ID_RE).optional(),
+    reason: reasonSchema,
+    retryable: z.boolean(),
+    remaining: rawAmountSchema,
+    meterReadingId: z.string().min(1).nullable(),
+    detail: z.string(),
+  })
+  .refine((message) => message.retryable === retryableFor(message.reason), {
+    message: "retryable must match REASONS table for this reason",
+    path: ["retryable"],
+  });
 
 export type Message2Unsigned = z.infer<typeof message2UnsignedSchema>;
+
+/**
+ * The only way to build an unsigned M2 envelope (review finding, Lote B):
+ * `retryable` and the HTTP status are always derived from `REASONS`, never
+ * written by hand at a call site. `remaining` defaults to `"0"` for contexts
+ * with no channel/voucher (stage 1 direct charges, pre-body-parse
+ * fail-closed responses) — VE-R7/VE-R8 only define its semantics for the
+ * `POST /vouchers` response.
+ */
+export function buildUnsigned(
+  reason: Reason,
+  fields: {
+    sessionId: string | null;
+    channel?: string;
+    remaining?: string;
+    meterReadingId: string | null;
+    detail: string;
+  },
+): { body: Message2Unsigned; status: 200 | 503 } {
+  const body = message2UnsignedSchema.parse({
+    version: 1,
+    status: "unsigned",
+    sessionId: fields.sessionId,
+    ...(fields.channel !== undefined ? { channel: fields.channel } : {}),
+    reason,
+    retryable: retryableFor(reason),
+    remaining: fields.remaining ?? "0",
+    meterReadingId: fields.meterReadingId,
+    detail: fields.detail,
+  });
+  return { body, status: statusFor(reason) };
+}
 
 export const message2Schema = z.discriminatedUnion("status", [
   message2SignedSchema,

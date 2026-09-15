@@ -967,10 +967,8 @@ Sobre ese mutex se monta la **coalescencia** que mitiga R11: si llegan varias le
 | `SOROBAN_RPC_URL` | url | no | `https://soroban-testnet.stellar.org` |
 | `USDC_SAC_CONTRACT` | C… 56 | no | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
 | `STELLAR_RECIPIENT` | G… 56 | sí | — |
-| `MPP_SECRET_KEY` | string no vacío | sí | — |
+| `MPP_SECRET_KEY` | string no vacío (secreto HMAC genérico de mppx, no un Keypair — confirmado contra el código fuente instalado, spike S3) | sí | — |
 | `FEE_PAYER_SECRET` | S… 56 | sí | — |
-| `PRICE_PER_MIB_RAW` | string de entero > 0 | sí | — |
-| `CHANNEL_CONTRACT` | C… 56 | sí en escalón 2 | — |
 | `COMMITMENT_PUBKEY` | 64 hex | sí en escalón 2 | — |
 | `FUNDER_ACCOUNT` | G… 56 | sí en escalón 2 | — |
 | `SETTLE_THRESHOLD_BPS` | int 1-10000 | no | `5000` |
@@ -994,15 +992,14 @@ Sobre ese mutex se monta la **coalescencia** que mitiga R11: si llegan varias le
 | `AGENT_PORT` | int | no | `8081` |
 | `GATEWAY_TOKEN` | string no vacío | sí | — |
 | `PAYMENT_SERVER_URL` | url | sí | `http://127.0.0.1:8080` |
-| `MPP_SECRET_KEY` | string no vacío | sí | — |
 | `SIGNER_SECRET` | S… 56 | sí | — |
 | `COMMITMENT_SECRET` | 64 hex | sí en escalón 2 | — |
-| `CHANNEL_CONTRACT` | C… 56 | sí en escalón 2 | — |
-| `PRICE_PER_MIB_RAW` | string de entero > 0 | sí | — |
 | `MAX_DELTA_PER_REQUEST_RAW` | string de entero > 0 | no | `5000000` |
 | `METER_REPORT_INTERVAL_MS` | int | no | `10000` |
 
-`STELLAR_NETWORK`, `SOROBAN_RPC_URL`, `USDC_SAC_CONTRACT`, `DATA_DIR`, `EXPLORER_BASE_URL`, `BACKEND_EVENTS_URL` y `LOG_LEVEL` son compartidas y tienen los mismos defaults.
+El agent **no** lee `MPP_SECRET_KEY`: esa variable es el secreto HMAC que mppx usa para firmar los desafíos 402 en el `server` únicamente (confirmado contra el código fuente instalado de `mppx`, spike S3). La tabla anterior (revisión previa a este addendum) la listaba también para el agent con el mismo nombre; con un único `.env` compartido, `dotenv` se queda con el último valor leído y un proceso pisaba la clave del otro sin avisar (hallazgo de revisión, corregido en este mismo pase — antes de que llegara a implementarse).
+
+`STELLAR_NETWORK`, `SOROBAN_RPC_URL`, `USDC_SAC_CONTRACT`, `DATA_DIR`, `EXPLORER_BASE_URL`, `BACKEND_EVENTS_URL`, `LOG_LEVEL`, `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` son compartidas — mismo nombre, mismo valor, definidas una sola vez en el `.env`, leídas por los dos procesos — y tienen los mismos defaults (`CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` no tienen default, ver nota abajo).
 
 `PRICE_PER_MIB_RAW` no tiene default a propósito: un default convierte un olvido de configuración en una tarifa inventada. Además debe coincidir en los dos procesos, y la verificación de esa coincidencia es el cross-check de D4, que salta como `amount_rejected` en el primer request.
 
@@ -1019,6 +1016,7 @@ SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 USDC_SAC_CONTRACT=CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
 EXPLORER_BASE_URL=https://stellar.expert/explorer/testnet
 PRICE_PER_MIB_RAW=
+CHANNEL_CONTRACT=
 DATA_DIR=./data
 LOG_LEVEL=info
 # BACKEND_EVENTS_URL=
@@ -1028,7 +1026,6 @@ PORT=8080
 STELLAR_RECIPIENT=
 MPP_SECRET_KEY=
 FEE_PAYER_SECRET=
-CHANNEL_CONTRACT=
 COMMITMENT_PUBKEY=
 FUNDER_ACCOUNT=
 SETTLE_THRESHOLD_BPS=5000
