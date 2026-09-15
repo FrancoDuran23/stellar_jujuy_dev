@@ -1,0 +1,33 @@
+{
+  "name": "payments-mpp",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "server": "node src/server/main.ts",
+    "agent": "node src/agent/main.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
+    "verify:deps": "node scripts/verify-deps.mjs",
+    "preflight": "node scripts/preflight.ts",
+    "channel:open": "node src/cli/open-channel.ts",
+    "channel:top-up": "node src/cli/top-up.ts",
+    "channel:close": "node src/cli/close-channel.ts",
+    "channel:close-start": "node src/cli/close-start.ts",
+    "channel:refund": "node src/cli/refund.ts"
+  },
+  "dependencies": {
+    "@stellar/mpp": "0.7.1",
+    "@stellar/stellar-sdk": "15.1.0",
+    "mppx": "0.6.29",
+    "viem": "2.56.5",
+    "zod": "4.6.5",
+    "express": "5.2.1",
+    "dotenv": "17.4.2"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.20.2",
+    "@types/express": "5.0.6"
+  }
+}
