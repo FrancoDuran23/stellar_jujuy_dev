@@ -1312,60 +1312,67 @@ Commit: `feat(persistence): add append-only voucher log and event cursor` · Lí
 
 Commit: `feat(stage1): add 402 charge server and headless agent client` · Líneas estimadas: 380
 
-- [ ] **T3.1** — `config/env.ts` (schemas por rol)
+- [x] **T3.1** — `config/env.ts` (schemas por rol)
   - Ejecutor: agente
   - Archivos: src/config/env.ts, src/config/env.test.ts
   - Cumple: CF-R1, CF-R2, FC-R3; tabla 3.9/4.4
   - Pruebas: parsea env válido; rechaza `CHANNEL_CONTRACT`/`COMMITMENT_PUBKEY`/`STELLAR_RECIPIENT` malformados
   - Depende de: T1.4
   - Líneas estimadas: 90
-- [ ] **T3.2** — `server/app.ts` + `routes/charge.ts` + `server/charge-service.ts`
+  - **Cerrado 2026-09-15**: schemas separados server/agent sobre un `sharedSchema` común (`.extend()`); el agent NO incluye `MPP_SECRET_KEY` (amendment del orquestador, confirmado contra el código fuente instalado de `mppx` — ver Spike S3 en este §6). `PRICE_PER_MIB_RAW`/`MAX_DELTA_PER_REQUEST_RAW` se transforman a `bigint` en el propio schema. Commit siguiente en este lote.
+- [x] **T3.2** — `server/app.ts` + `routes/charge.ts` + `server/charge-service.ts`
   - Ejecutor: agente
-  - Archivos: src/server/app.ts, src/server/routes/charge.ts, src/server/charge-service.ts
+  - Archivos: src/server/app.ts, src/server/routes/charge.ts, src/server/charge-service.ts, src/server/app.test.ts, src/server/charge-service.test.ts, src/shared/http.ts, src/shared/http.test.ts, src/server/main.ts
   - Cumple: S1-R1, S1-R2, S1-R4, S1-R6
   - Pruebas: 402 sin credencial (mock de `ChargePort`); `payment:{txHash,explorerUrl,network}` en 200; envelope `unsigned` con `reason`/`retryable` cuando falla
   - Depende de: T3.1, T1.1, T1.3
   - Líneas estimadas: 140
-- [ ] **T3.3** — `agent/app.ts` + `agent/charge-client.ts`
+  - **Cerrado 2026-09-15**: `ChargeResult{response,settled}` en vez de inferir el resultado del status HTTP (`amount_rejected` también es 200, per FT-R6). `server/app.test.ts` levanta el `Express` real en un puerto efímero y usa `fetch` real — solo el `ChargePort` es fake. `server/main.ts` (no listado en Archivos originalmente, requerido para `npm run server`) implementa el orden `dotenv/config` → `listen()` → `boot.ensureReady()`.
+- [x] **T3.3** — `agent/app.ts` + `agent/charge-client.ts`
   - Ejecutor: agente
-  - Archivos: src/agent/app.ts, src/agent/charge-client.ts
+  - Archivos: src/agent/app.ts, src/agent/charge-client.ts, src/agent/app.test.ts, src/agent/charge-client.test.ts, src/agent/main.ts
   - Cumple: S1-R2, S1-R3
   - Pruebas: modo pull con `ChargePort` fake; balance XLM del agent no se toca en el fake
   - Depende de: T3.1
   - Líneas estimadas: 90
-- [ ] **T3.4** — `scripts/preflight.ts` (código)
+  - **Cerrado 2026-09-15**: `Mppx.create({polyfill:false})` del lado cliente para no mutar `globalThis.fetch` del proceso (hallazgo de Spike S3, ver más abajo); `agent/app.ts` queda como scaffold mínimo (`/health` únicamente) para que WU5 lo extienda con `POST /vouchers`. `agent/main.ts` (no listado en Archivos originalmente, requerido para `npm run agent` y T8.2) es el CLI headless de un solo cobro.
+- [x] **T3.4** — `scripts/preflight.ts` (código)
   - Ejecutor: agente
-  - Archivos: scripts/preflight.ts
+  - Archivos: scripts/preflight.ts, scripts/preflight.test.ts
   - Cumple: R1 (mitigación, propuesta 2.5), CL-R12
   - Pruebas: node:test con `TrustlinePort` fake que reporta falta de trustline en una de las dos cuentas → WARN, no bloquea
   - Depende de: T1.4
   - Líneas estimadas: 60
+  - **Cerrado 2026-09-15**: la verificación real de trustline usa Horizon (`@stellar/mpp`'s `HORIZON_URLS`), no Soroban RPC — USDC es un SAC que envuelve un activo clásico, y la trustline clásica vive en el balance de Horizon, no en el estado de cuenta de Soroban RPC. `npm test` amplía su glob a `scripts/**/*.test.ts` (antes solo `.mjs`) para correr este archivo.
 
 ### WU4 — Fail-closed, `/ready` y eventos
 
 Commit: `feat: add fail-closed boot, readiness middleware, and webhook events` · Líneas estimadas: 240
 
-- [ ] **T4.1** — `config/boot.ts` + `requireReady` + `routes/health.ts`
+- [x] **T4.1** — `config/boot.ts` + `requireReady` + `routes/health.ts`
   - Ejecutor: agente
   - Archivos: src/config/boot.ts, src/server/middleware/require-ready.ts, src/server/routes/health.ts
   - Cumple: FC-R1, FC-R2, FC-R4, FC-R5, FC-R6, FC-R7, FC-R8
   - Pruebas: `listen()` ocurre antes de `buildInstance()`; RPC caído → `/health` 200, ruta de pago 503 con `Retry-After:5`; reintento acotado a `INIT_RETRY_INTERVAL_MS`
   - Depende de: T3.1, T3.2
   - Líneas estimadas: 110
-- [ ] **T4.2** — `events/emit.ts` (webhook)
+  - **Cerrado 2026-09-15**: `UnavailableReason = Reason | "config_invalid" | "voucher_log_corrupt"` — `/ready` muestra la razón específica (alarma), toda ruta de pago 503 la traduce a un `Reason` válido de M2 vía `toM2Reason()` (nunca se filtra `config_invalid` al gateway). Verificado end-to-end con `node src/server/main.ts` sin `.env`: escucha en `:8080` de inmediato, `/health` 200, `/ready` y `/paid-resource` 503 nombrando las variables faltantes sin secretos (ver comandos abajo).
+- [x] **T4.2** — `events/emit.ts` (webhook)
   - Ejecutor: agente
   - Archivos: src/shared/events.ts (extensión), src/shared/events.test.ts
   - Cumple: EV-R4, EV-R5, EV-R6
   - Pruebas: `BACKEND_EVENTS_URL` definido → POST con timeout 2s, hasta 3 reintentos, cola acotada; webhook caído no afecta el pago
   - Depende de: T1.3, T1.4
   - Líneas estimadas: 70
-- [ ] **T4.3** — Tests de escenarios fail-closed
+  - **Cerrado 2026-09-15**: reintento del webhook reusa `shared/retry.ts::withRetry` (mismo primitivo que RPC/agent→server, 1+3 intentos) en vez de una implementación paralela. `createEventEmitter(webhookSink?)` envuelve `emit()` sin cambiar su firma; `server/main.ts` lo construye solo si `BACKEND_EVENTS_URL` está definido y lo pasa a `charge-service.ts` vía `app.ts`/`routes/charge.ts` (hilo de cableado no listado explícitamente en las tareas pero necesario para que EV-R4 sea alcanzable en runtime, no solo en el módulo).
+- [x] **T4.3** — Tests de escenarios fail-closed
   - Ejecutor: agente
   - Archivos: src/config/boot.test.ts
   - Cumple: escenarios 3.5 (RPC caído al arrancar, recuperación sin reinicio, diagnóstico en diez segundos)
   - Pruebas: `COMMITMENT_PUBKEY` malformado → `/ready` nombra la variable sin exponer secretos
   - Depende de: T4.1
   - Líneas estimadas: 60
+  - **Cerrado 2026-09-15**: 19 tests cubriendo `createFailClosedBoot` (primer intento siempre corre, throttle de `retryIntervalMs`, recuperación sin reinicio, llamadas concurrentes comparten un solo intento, `buildInstance` que lanza nunca se propaga sin capturar) y `createServerBoot` (env inválido → `config_invalid` sin fuga de secretos, delegación a un `buildChargeInstance` fake). El escenario "RPC caído / recuperación" también se ejerce contra `server/app.ts` real en `app.test.ts` (T3.2).
 
 ### WU5 — `POST /vouchers` (escalón 1.5, contra consumo simulado)
 
@@ -1597,6 +1604,8 @@ Todas `agente`, todas sin acceso a testnet real (usan los puertos `ChannelPort`/
 
 **Condición de corte**: detenerse después de T5.4. No tocar T0.5 ni T0.6 (requieren al compañero del gateway y ejecución real) ni ninguna tarea de WU6/WU7 (escalón 2) hasta que un humano marque **T8.2** — hash de escalón 1 verificado en el explorador. Si T8.2 no está cerrado el jueves 17, avisar al equipo ese mismo día (§13/§15), no el viernes.
 
+**Progreso real (Lote B, 2026-09-15)**: T3.1-T3.4 y T4.1-T4.3 cerrados (ver checkboxes arriba y §6 para detalle, hallazgos del SDK, comandos y desviaciones). Restante del primer lote (T5.1-T5.4, `POST /vouchers`) pendiente para el próximo batch de `sdd-apply`. La compuerta dura de escalón 1 (**T8.2**, humano) sigue sin cerrarse — WU6/WU7 permanecen bloqueadas independientemente de cuántos batches de agente corran antes.
+
 ## 6. Implementación
 
 ### Lote A — WU0, WU1, WU2 (2026-09-15)
@@ -1644,3 +1653,77 @@ Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a tes
 - `T0.5` (acuerdos con el gateway) y `T0.6` (verificación de Node y `verify:deps` en las máquinas del equipo) siguen pendientes, son `pareja`/`humano` y no se tocaron.
 - La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre `T8.2`.
 - Vulnerabilidades transitivas de `axios`/`toml` sin resolver (desviación 7) — decisión pendiente del equipo, no bloquea WU3-WU5.
+
+### Correcciones de revisión aplicadas en lote B (2026-09-15)
+
+Antes de tocar código de WU3, se aplicaron tres hallazgos de una revisión de lote A sobre archivos ya cerrados (`src/shared/messages.ts`, `.env.example`):
+
+1. **`message2UnsignedSchema` no ataba `retryable` a `REASONS`.** Se agregó un `.refine()` que exige `retryable === retryableFor(reason)`, y `reasonSchema` ahora se deriva de `isReason()` (reasons.ts) en vez de repetir la lista de claves a mano — las dos tablas ya no pueden desincronizarse. Se agregó `buildUnsigned(reason, fields)` como única forma de construir un envelope `unsigned`: deriva `retryable` y el status HTTP de `REASONS`, nunca a mano. Todo el código de este lote (charge-service.ts, require-ready.ts, boot.ts vía `shared/http.ts::unsignedResponse`) pasa exclusivamente por ahí.
+2. **`sessionId`/`meterReadingId` eran `required` en la rama `unsigned`**, pero `requireReady` (FC-R5) responde antes de que exista un body que parsear, y el camino de fallo de validación de M1 (VE-R2) puede no tener body usable tampoco. Ahora son `.nullable()` (no `.optional()`) solo en la rama `unsigned` — se emite `null`, nunca `""` ni un placeholder como `"unknown"`. La rama `signed` no cambió: un vale firmado siempre tiene sesión y lectura real detrás.
+3. **`.env.example` definía `MPP_SECRET_KEY`, `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` dos veces** (una por rol); con un único `.env` compartido, `dotenv` se queda con el último valor y un proceso pisaba la clave del otro sin avisar. `MPP_SECRET_KEY` se sacó del bloque `agent` (confirmado como servidor-only contra el código fuente instalado de `mppx`, ver Spike S3 más abajo — esto además zanja el punto abierto de la desviación 4 del lote A). `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` pasaron al bloque `shared`, definidos una sola vez. La tabla 4.4 del diseño (arriba en este mismo documento) se corrigió para reflejar lo mismo — antes tenía la misma duplicación que el `.env.example`.
+
+Commit separado: `fix(shared): tie M2 retryable to REASONS and fix env var collisions` (`37aa16e`), antes del commit de WU3.
+
+### Lote B — WU3, WU4 (2026-09-15)
+
+Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a testnet real. Cubre exactamente `T3.1, T3.2, T3.3, T3.4, T4.1, T4.2, T4.3` — escalón 1 completo (cobro puntual patrocinado) más arranque fail-closed, `/health`/`/ready` y el webhook opcional de eventos. No se tocó WU5 (`POST /vouchers`) ni ninguna tarea de WU6/WU7 (compuerta de **T8.2** sigue cerrada).
+
+**WU3 — Escalón 1: charge server + cliente headless.** `config/env.ts` valida por rol sobre un `sharedSchema.extend()` común; el schema del agent no incluye `MPP_SECRET_KEY` (amendment del orquestador, confirmada contra el SDK real — ver Spike S3). `server/charge-service.ts` + `server/routes/charge.ts` implementan el puerto `ChargePort` (`challenge` | `settled` | `failed`) y lo traducen a HTTP: el 402 pasa sin tocar, un `settled` agrega `payment:{txHash,explorerUrl,network}` al body y emite `charge.settled`, un `failed` construye el envelope `unsigned` vía `shared/http.ts::unsignedResponse` y emite `payment.failed`. La ruta rastrea "consumo simulado" con un `Map<sessionId, bigint>` en memoria y solo avanza el contador cuando `ChargeResult.settled === true` — nunca a partir del status HTTP, porque `amount_rejected`/`stale_reading` también son 200 (FT-R6). `agent/charge-client.ts` es el cliente real (`@stellar/mpp/charge/client`, `polyfill:false` — ver Spike S3) detrás de un `ChargeClientPort` que un fake puede sustituir sin tocar red. `scripts/preflight.ts` verifica la trustline de USDC contra **Horizon**, no Soroban RPC (ver Spike S3). `server/app.ts` y `server/main.ts` no se armaron en este work unit — dependen del `FailClosedBoot` de WU4 y se muestran ahí para que el commit de WU3 compile y pase tests por sí solo (113/113 antes de agregar WU4).
+
+**WU4 — Fail-closed, `/ready` y eventos.** `config/boot.ts::createFailClosedBoot` es el wrapper genérico de re-arme (primer intento siempre corre; los siguientes se acotan a `retryIntervalMs`; llamadas concurrentes comparten un único intento en vuelo). `buildServerChargeInstance` es el `ChargePort` real: probe de salud de Soroban RPC acotado a `RPC_HEALTH_TIMEOUT_MS` (FC-R4) y luego `Mppx.create` + `stellar.charge({feePayer, store: Store.memory()})`. `UnavailableReason` agrega `config_invalid`/`voucher_log_corrupt` como razones de alarma que **nunca** viajan en M2; `toM2Reason()` las traduce a `internal_error` para cualquier 503 de ruta de pago, mientras `/ready` sigue mostrando la razón específica. `requireReady` re-arma (respetando el throttle) y, si el mismo intento tiene éxito, sirve la misma request que lo disparó — el escenario "recuperación sin reinicio" de la spec tal cual. `shared/events.ts::createWebhookSink` reusa `shared/retry.ts::withRetry` (mismo primitivo que RPC/agent→server) para el POST fire-and-forget con cola acotada.
+
+#### Spike S3 (parte offline) — API real de `@stellar/mpp`/`mppx` encontrada
+
+Resuelto leyendo `node_modules/@stellar/mpp/{README.md,dist/**/*.d.ts,dist/charge/server/Charge.js}` y `node_modules/mppx/src/{server/Mppx.ts,Receipt.ts,Store.ts,client/Mppx.ts}` después del `npm install` — sin red Soroban, tal como preveía la tarea:
+
+1. **`MPP_SECRET_KEY` no es una Stellar `Keypair`.** `Mppx.create({ secretKey, methods })` (de `@stellar/mpp/charge/server`, re-exportado de `mppx/server`) usa `secretKey` para HMAC-firmar los desafíos 402 (`Challenge.verify`) — es un string genérico no vacío, no una clave Stellar. La spec 3.9 decía "parseable como `Keypair`"; eso no coincide con el SDK real y el schema de `config/env.ts` sigue al SDK, no a la spec. El agent nunca lo lee — es exclusivo del `server` (amendment del orquestador confirmada empíricamente, no solo por instrucción).
+2. **El fee payer/sponsor se configura aparte, con `feePayer.envelopeSigner`.** `stellar.charge({ recipient, currency, network, feePayer: { envelopeSigner: Keypair|string } })` es lo que activa el modo patrocinado: el challenge incluye `methodDetails.feePayer:true`, el cliente firma únicamente las authorization entries con una cuenta placeholder de ceros, y el servidor reconstruye la transacción con `envelopeSigner` como source, la firma y la transmite. `envelopeSigner` es el valor de `FEE_PAYER_SECRET` (D10: en la demo es la misma cuenta que `STELLAR_RECIPIENT`, pero son dos variables de entorno separadas porque el `Keypair` de firma de envelope y el string usado como `recipient` en `stellar.charge()` son parámetros distintos del SDK).
+3. **El `txHash` sale del header `Payment-Receipt`, ya calculado por el SDK — ningún fallback de diseño hizo falta.** El diseño proponía dos fallbacks (hash del sobre firmado, o `getEvents` del transfer SEP-41) para el caso de que el SDK no expusiera el hash. Resultó innecesario: leyendo `Charge.js` compilado, la rama `case 'transaction'` computa `const txHash = broadcastInnerTx.hash().toString('hex')` (exactamente el fallback A del diseño, ya hecho por el SDK) y lo devuelve como `Receipt.from({ reference: sendResult.hash, ... })`. `result.withReceipt(response)` es una función pura de `respondReceipt` (confirmado en `Transport.ts`: solo clona headers y agrega `Payment-Receipt`, sin reenviar ni volver a verificar nada) — así que se puede invocar dos veces sin efecto secundario: una vez con una `Response` descartable solo para leer `Receipt.fromResponse(probe).reference`, y una segunda vez con el body real (`{payload, payment}`) ya con el `txHash` adentro. No hizo falta `AsyncLocalStorage` ni escuchar `onPaymentSuccess`.
+4. **`Mppx.create()` del lado cliente muta `globalThis.fetch` por default.** `mppx/client`'s `create()` acepta `polyfill: false` para devolver un `mppx.fetch` con el mismo manejo automático de 402 pero sin tocar el fetch global del proceso — necesario acá porque el mismo proceso Node corre `node:test`, que también usa `fetch` global; sin `polyfill:false` un test de `agent/charge-client.ts` habría contaminado el resto de la suite.
+5. **La trustline de USDC vive en Horizon, no en Soroban RPC.** `rpc.Server.getAccount()` (Soroban RPC) no expone balances/trustlines; esos son un concepto de la capa clásica. `scripts/preflight.ts` usa `Horizon.Server` (con la URL de `HORIZON_URLS`, exportada por `@stellar/mpp`) y revisa `account.balances` buscando `asset_code === "USDC"`.
+
+**Comandos ejecutados (resultado final):**
+
+| Comando | Resultado |
+|---|---|
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 131/131 tests en verde |
+| `npm run verify:deps` | `single resolved version for every pinned package` |
+| `node src/server/main.ts` sin `.env` (smoke manual) | escucha en `:8080` de inmediato; `GET /health` → 200 `{"status":"alive"}`; `GET /ready` → 503 `{"status":"unavailable","reason":"config_invalid","detail":"invalid or missing environment variable(s): PRICE_PER_MIB_RAW, STELLAR_RECIPIENT, MPP_SECRET_KEY, FEE_PAYER_SECRET", ...}`; `GET /paid-resource` → 503 con `Retry-After: 5` y envelope `unsigned`/`internal_error`/`retryable:true` — ningún valor de variable aparece en la respuesta |
+| `node src/agent/main.ts` sin `.env` (smoke manual) | falla limpio: `{"level":"error","msg":"invalid agent configuration","detail":"invalid or missing environment variable(s): PRICE_PER_MIB_RAW, GATEWAY_TOKEN, SIGNER_SECRET"}`, `exitCode=1`, sin stack trace |
+
+**Commits:**
+
+- `37aa16e` — `fix(shared): tie M2 retryable to REASONS and fix env var collisions` (correcciones de revisión, antes de WU3)
+- `2629b85` — `feat(stage1): add 402 charge server and headless agent client` (WU3, 113/113 tests standalone)
+- `c946dd0` — `feat: add fail-closed boot, readiness middleware, and webhook events` (WU4, 131/131 tests)
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`server/app.ts` y `server/main.ts` se armaron enteros en el commit de WU4, no en el de WU3**, aunque el diseño lista `server/app.ts` como archivo de T3.2. Tal como está escrito, `app.ts` ensambla la ruta de cobro *detrás* de `requireReady`/`/health`/`/ready`, que son de T4.1 — separarlo en dos versiones de `app.ts` (una sin fail-closed para WU3, otra con fail-closed para WU4) hubiera significado reescribir el mismo archivo dos veces sin ganar nada real. Se verificó explícitamente que el resto de WU3 (env.ts, http.ts, charge-service.ts, routes/charge.ts, agent/*, preflight) compila y pasa 113/113 tests por sí solo, sin `server/app.ts` ni `config/boot.ts`, antes de escribir WU4.
+2. **`FEE_PAYER_SECRET` se mantiene como variable separada de `MPP_SECRET_KEY`**, aunque D10 dice "una sola clave... recibe USDC y patrocina comisiones". La razón es de API, no de decisión de producto: `stellar.charge()` recibe `recipient` (string público) y `feePayer.envelopeSigner` (`Keypair`/secreto) como parámetros distintos — no existe un único parámetro "la misma cuenta cobra y paga fee". D10 sigue cumplida en la demo poniendo el mismo secreto real en ambas variables; el código simplemente necesita nombrarlas por separado porque el SDK las pide por separado.
+3. **`config/boot.ts::createServerBoot` usa un `retryIntervalMs` fijo (10000 ms, el default del diseño) en vez de leer `INIT_RETRY_INTERVAL_MS` del propio env parseado.** Leer el valor recién confirmado por el primer parseo exitoso para regular reintentos *futuros* de ese mismo parseo es circular (¿con qué intervalo se reintenta un parseo que todavía no se sabe si va a tener un `INIT_RETRY_INTERVAL_MS` custom?). Se documenta como límite conocido: un operador que fije un `INIT_RETRY_INTERVAL_MS` distinto de 10000 no lo ve reflejado en el throttle de reintento de *configuración* inválida (sí se respeta una vez que el proceso ya arrancó ready y se está reintentando por RPC caído, porque ahí el valor parseado ya existe). No bloquea el escalón 1.
+4. **`scripts/preflight.ts` no estaba en el glob de `npm test`.** El diseño (4.4) solo agrega `scripts/**/*.test.mjs` al glob (para `verify-deps.test.mjs`); `preflight.test.ts` es `.ts`, no `.mjs`. Se amplió el glob a `"scripts/**/*.test.mjs" "scripts/**/*.test.ts"`. Mismo patrón que la desviación 5 del lote A, mismo motivo: sin esto, `npm test` nunca corre esa suite.
+5. **El monto del cobro de escalón 1 usa un `Map` en memoria por `sessionId` para simular consumo creciente**, en vez de no tener ningún estado. La spec (3.1, escenario "cobros repetidos") pide que `amount = cumulative(now) - cumulative(previous)`; sin persistir *algún* `previous` entre requests HTTP independientes, esa resta no tiene con qué compararse. Se documentó explícitamente como alcance de demo (nunca un usuario/sesión real, OS-R4): si no se pasa `?sessionId=`, todas las requests comparten una clave `"default"`.
+6. **No se implementó el chequeo de "voucher log no abrible" de FC-R3** (uno de los tres motivos de `unavailable` que pide la spec) — el voucher log todavía no se conecta a `config/boot.ts` en este lote porque su primer consumidor real es WU5 (`POST /vouchers` del agent) y WU6 (verificación de vales del server). `UnavailableReason` ya incluye `voucher_log_corrupt` para cuando se cablee. Los otros dos motivos de FC-R3 (env inválido, RPC caído) sí están implementados y probados.
+
+**Descubrimientos no obvios** (ver también Spike S3 arriba; guardados en Engram tipo `discovery`): `mppx` se distribuye con su código fuente TypeScript además de los `.d.ts`/`.js` compilados (`exports["."]. src`), así que se pudo leer la implementación real (`Charge.js`, `Mppx.ts`, `Transport.ts`) en vez de inferir comportamiento solo de los tipos — así se descubrió que `withReceipt()` es puro y que el `txHash` ya viene resuelto, evitando escribir cualquiera de los dos fallbacks que el diseño había dejado preparados. `mppx` también trae un middleware Express propio (`mppx/express`) con el mismo patrón de bridge Express↔Fetch que se implementó a mano en `routes/charge.ts` — no se adoptó porque no expone el `txHash` de la receipt al handler (solo lo adjunta como header), pero confirma que el enfoque manual es el mismo que usan los mantenedores del SDK.
+
+**Puntos abiertos para el próximo lote (WU5 en adelante):**
+
+- WU5 (`POST /vouchers`, mutex por canal, guardrails) es la siguiente pieza de escalón 1.5 — sigue sin tocar.
+- Cablear el chequeo de voucher log en `config/boot.ts` (FC-R3, desviación 6) cuando WU5/WU6 conecten la persistencia al arranque.
+- Revisar si `INIT_RETRY_INTERVAL_MS` debería aplicarse también al throttle de reintento de configuración inválida (desviación 3) — hoy es un valor fijo de 10s.
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre **T8.2**.
+
+**Pasos para que un humano cierre T8.2 (hash de escalón 1 en el explorador, gate dura de WU6/WU7):**
+
+1. Desplegar/confirmar las dos cuentas de testnet: una para `STELLAR_RECIPIENT`/`FEE_PAYER_SECRET` (puede ser la misma cuenta, D10) y otra para `SIGNER_SECRET` (el funder/agent). Fondear ambas con XLM del faucet de testnet (`https://friendbot.stellar.org?addr=<G...>`).
+2. Crear la trustline de USDC en **ambas** cuentas contra `USDC_SAC_CONTRACT` (default `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`, testnet) — con `stellar-cli` o Freighter. R1/CL-R12 existen exactamente por este paso.
+3. `cp .env.example .env` y completar: `STELLAR_RECIPIENT`, `MPP_SECRET_KEY` (cualquier string no vacío, no es una clave Stellar — ver Spike S3 punto 1), `FEE_PAYER_SECRET` y `SIGNER_SECRET` (secretos `S...` de las cuentas del paso 1), `PRICE_PER_MIB_RAW` (ej. `10000`), `GATEWAY_TOKEN` (cualquier string no vacío). Dejar `CHANNEL_CONTRACT`/`COMMITMENT_PUBKEY`/`FUNDER_ACCOUNT`/`COMMITMENT_SECRET` vacíos (son de escalón 2).
+4. `npm run preflight` — confirmar que no hay WARN de trustline faltante (si lo hay, volver al paso 2).
+5. Terminal 1: `npm run server` — esperar la línea `payments-mpp server listening on :8080` y confirmar `curl -s http://127.0.0.1:8080/ready` devuelve `{"status":"ready",...}` (puede tardar unos segundos: la primera carga de `@stellar/mpp`/`@stellar/stellar-sdk` es pesada).
+6. Confirmación rápida del checklist §14.1: `curl -i http://127.0.0.1:8080/paid-resource` sin credencial → debe devolver `402` con el challenge de MPP.
+7. Terminal 2: `npm run agent` — hace exactamente un cobro y termina. La salida esperada es una línea `{"level":"info","msg":"stage 1 purchase settled","txHash":"...","explorerUrl":"...","network":"stellar:testnet"}`.
+8. Pegar en `docs/payments-sdd.md` (evidencia §14.3): el `txHash` y el `explorerUrl` de la salida del paso 7, más la línea `charge.settled` que imprime la Terminal 1 (stdout del server), y confirmar en el explorador (`stellar.expert`) que la transacción existe y que el balance USDC de `STELLAR_RECIPIENT` aumentó. Confirmar también que el balance XLM de la cuenta de `SIGNER_SECRET` no cambió (S1-R3) comparando el balance antes/después con `stellar-cli` o el explorador.
+9. Marcar **T8.2** como `[x]` en la sección de tareas (§5, WU8) recién cuando los tres elementos de evidencia (hash visible, `charge.settled` en stdout, balance XLM del agent sin cambios) estén confirmados — no antes, y no basta con que los tests unitarios estén en verde (S1-R7 lo dice explícitamente).
