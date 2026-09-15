@@ -5,41 +5,62 @@
 
 import { z } from "zod";
 import { isReason, retryableFor, statusFor, type Reason } from "./reasons.ts";
-
-const NETWORKS = ["stellar:testnet", "stellar:pubnet"] as const;
-
-// Stellar contract id: 56 chars, base32 (RFC 4648, no padding), starts with C.
-const CONTRACT_ID_RE = /^C[A-Z2-7]{55}$/;
+import { isStellarContractId } from "./stellar/keys.ts";
+import { NETWORKS } from "./stellar/network.ts";
 
 // Raw i128 units of a SEP-41 asset, 7 decimals implied. Never a JSON number
-// (exceeds Number.MAX_SAFE_INTEGER for real sessions) and never a decimal
-// string like "0.0125" (VE-R3).
-const RAW_AMOUNT_RE = /^\d+$/;
+// (exceeds Number.MAX_SAFE_INTEGER for real sessions), never a decimal
+// string like "0.0125" (VE-R3), and never a leading-zero string like "007"
+// (review finding, Lote C: "007" is not a canonical integer literal and
+// must not silently round-trip as 7).
+const RAW_AMOUNT_RE = /^(0|[1-9]\d*)$/;
+
+// i128 max: 2**127 - 1. An amount above this can never be a real SEP-41 raw
+// balance and must be rejected before it reaches BigInt arithmetic anywhere
+// downstream (review finding, Lote C).
+const MAX_I128 = 2n ** 127n - 1n;
 
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 const HEX_128_RE = /^[0-9a-fA-F]{128}$/;
 
 const rawAmountSchema = z
   .string()
-  .regex(RAW_AMOUNT_RE, "must be a string of digits (raw i128 units), never a decimal or a number");
+  .regex(RAW_AMOUNT_RE, "must be a string of digits (raw i128 units), never a decimal, a number, or a leading zero")
+  // Re-checks the format before calling BigInt(): zod runs every check
+  // attached to a schema even after an earlier one fails (same pitfall as
+  // config/env.ts's rawPositiveIntegerRaw), so without the regex guard here
+  // a value that already failed `.regex()` above (e.g. "0.0125") would still
+  // reach `BigInt()` and throw a raw SyntaxError instead of a clean
+  // validation issue.
+  .refine(
+    (value) => RAW_AMOUNT_RE.test(value) && BigInt(value) <= MAX_I128,
+    "must not exceed the i128 maximum (2**127 - 1)",
+  );
 
 /**
  * Message 1 — gateway/meter -> agent, `POST /vouchers` request body.
  * `channel` is omitted in stage 1 (charge mode) and required in stage 2
  * (VE-R5); that distinction is enforced by the route handler, not here, so
- * the same schema serves both stages (design 4.1).
+ * the same schema serves both stages (design 4.1). `.strict()` (review
+ * finding, Lote C, VE-R2 "schema estricto"): an unknown key must be a `400`,
+ * never silently ignored.
  */
-export const message1Schema = z.object({
-  version: z.literal(1),
-  sessionId: z.string().min(1),
-  channel: z.string().regex(CONTRACT_ID_RE).optional(),
-  network: z.enum(NETWORKS),
-  asset: z.literal("USDC"),
-  cumulativeBytes: z.number().int().nonnegative(),
-  cumulativeAmount: rawAmountSchema,
-  meterReadingId: z.string().min(1),
-  observedAt: z.iso.datetime(),
-});
+export const message1Schema = z
+  .object({
+    version: z.literal(1),
+    sessionId: z.string().min(1),
+    channel: z.string().refine(isStellarContractId, "must be a 56-char Soroban contract id starting with C").optional(),
+    network: z.enum(NETWORKS),
+    asset: z.literal("USDC"),
+    cumulativeBytes: z.number().int().nonnegative(),
+    cumulativeAmount: rawAmountSchema,
+    meterReadingId: z.string().min(1),
+    // `offset: true` (review finding, Lote C): the meter may report in its
+    // own local offset instead of normalizing to UTC first; VE-R2 asks for
+    // a valid ISO datetime, not specifically a UTC one.
+    observedAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
 
 export type Message1 = z.infer<typeof message1Schema>;
 
@@ -52,7 +73,7 @@ export const message2SignedSchema = z.object({
   version: z.literal(1),
   status: z.literal("signed"),
   sessionId: z.string().min(1),
-  channel: z.string().regex(CONTRACT_ID_RE),
+  channel: z.string().refine(isStellarContractId, "must be a 56-char Soroban contract id starting with C"),
   voucher: z.object({
     cumulativeAmount: rawAmountSchema,
     signature: z.string().regex(HEX_128_RE),
@@ -86,7 +107,7 @@ export const message2UnsignedSchema = z
     version: z.literal(1),
     status: z.literal("unsigned"),
     sessionId: z.string().min(1).nullable(),
-    channel: z.string().regex(CONTRACT_ID_RE).optional(),
+    channel: z.string().refine(isStellarContractId, "must be a 56-char Soroban contract id starting with C").optional(),
     reason: reasonSchema,
     retryable: z.boolean(),
     remaining: rawAmountSchema,

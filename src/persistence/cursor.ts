@@ -24,24 +24,56 @@ const eventsCursorSchema = z.object({
   updatedAt: z.string().min(1),
 });
 
+function warn(reason: string, filePath: string, detail: string): void {
+  console.warn(JSON.stringify({ level: "warn", reason, filePath, detail }));
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
- * Reads the persisted cursor, or `undefined` if the file does not exist or
- * does not parse. A missing/corrupt cursor is not fatal here — the caller
- * (the close_start monitor, a later work unit) falls back to `deployLedger`
- * or `latestLedger - CLOSE_MONITOR_LOOKBACK_LEDGERS` (design 4.2).
+ * Reads the persisted cursor, or `undefined` if the file does not exist,
+ * does not parse, or (when `expectedChannel` is given) belongs to a
+ * different channel. A missing/corrupt cursor is not fatal here — the
+ * caller (the close_start monitor, a later work unit) falls back to
+ * `deployLedger` or `latestLedger - CLOSE_MONITOR_LOOKBACK_LEDGERS` (design
+ * 4.2) — but "not fatal" must never mean "silent" (review finding, Lote C):
+ * invalid JSON, a shape that fails the schema, and a channel mismatch each
+ * emit a WARN before falling back, exactly like `voucher-log.ts` does for a
+ * corrupt trailing line.
+ *
+ * `expectedChannel`, when given, guards against serving a stale cursor left
+ * over from a previous channel (e.g. a channel closed and a new one opened
+ * against the same `DATA_DIR` without clearing `data/events-cursor-*.json`):
+ * replaying a monitor from a wrong channel's `lastLedger` would silently
+ * miss that channel's real `close_start`.
  */
-export function readCursor(filePath: string): EventsCursor | undefined {
+export function readCursor(filePath: string, expectedChannel?: string): EventsCursor | undefined {
   if (!fs.existsSync(filePath)) {
     return undefined;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
+  } catch (error) {
+    warn("events_cursor_invalid_json", filePath, messageOf(error));
     return undefined;
   }
   const result = eventsCursorSchema.safeParse(parsed);
-  return result.success ? result.data : undefined;
+  if (!result.success) {
+    warn("events_cursor_invalid_shape", filePath, result.error.message);
+    return undefined;
+  }
+  if (expectedChannel !== undefined && result.data.channel !== expectedChannel) {
+    warn(
+      "events_cursor_channel_mismatch",
+      filePath,
+      `cursor is for channel ${result.data.channel}, expected ${expectedChannel}`,
+    );
+    return undefined;
+  }
+  return result.data;
 }
 
 /**
