@@ -7,7 +7,7 @@
     "server": "node src/server/main.ts",
     "agent": "node src/agent/main.ts",
     "check": "tsc --noEmit",
-    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
+    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\" \"scripts/**/*.test.ts\"",
     "verify:deps": "node scripts/verify-deps.mjs",
     "preflight": "node scripts/preflight.ts",
     "channel:open": "node src/cli/open-channel.ts",
