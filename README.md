@@ -7,11 +7,31 @@ gateway/meter can bill by bytes consumed. Full requirements and design live in
 
 ## Status
 
-Work units WU0 (scaffolding), WU1 (shared) and WU2 (persistence) are
-implemented. `server/`, `agent/`, and the channel CLIs (`WU3` onward) are not
-built yet — `npm run server`, `npm run agent`, and the `channel:*` scripts
-will fail until those work units land. What already works: dependency
-install, type checking, the full unit test suite, and `verify:deps`.
+Stage 1 (sponsored charge server + headless agent client) and stage 1.5
+(`POST /vouchers` against simulated consumption, with a `serve` mode for the
+agent) are implemented — `npm run server`, `npm run agent`, and
+`npm run agent:serve` all work. The channel CLIs (`channel:*`, escalón 2,
+`WU6` onward) are not built yet and remain behind the **T8.2** human gate
+(see `docs/sdd/payments-mpp.md` §5/§6). What already works: dependency
+install, type checking, the full unit test suite, `verify:deps`, and both
+processes end-to-end against a real testnet `.env`.
+
+## Running it
+
+- `npm run server` — starts the payment server on `PORT` (default `8080`).
+  `GET /health` and `GET /ready` are always reachable; `GET /paid-resource`
+  is fail-closed behind `/ready`.
+- `npm run agent` — one-shot CLI: makes exactly one paid request against
+  `PAYMENT_SERVER_URL` and exits (stage 1, S1-R7 evidence).
+- `npm run agent:serve` — long-running agent process: listens on
+  `AGENT_PORT` (default `8081`) and serves `GET /health`, `GET /ready`, and
+  `POST /vouchers` (stage 1.5).
+- `?cumulativeBytes=<n>` on `GET /paid-resource` sets the simulated
+  cumulative consumption for the request's session (`?sessionId=`, default
+  session otherwise); the charge is always the delta against the last value
+  billed for that session. A value that is not a non-negative integer is a
+  400; a value that does not advance past the last billed one (including a
+  repeat of the same value) is a 200 M2 `stale_reading` — no charge attempt.
 
 ## Quick path
 
@@ -47,5 +67,6 @@ install, type checking, the full unit test suite, and `verify:deps`.
 
 ## Next step
 
-Continue with WU3 (stage 1 charge server + headless agent client) once a
-human has completed the day-1 spikes in `docs/sdd/payments-mpp.md` §4.8.
+Escalón 1 is code-complete and ready for human verification: a human needs to
+close **T8.2** (§5, WU8; steps in `docs/sdd/payments-mpp.md` §6, Lote B/D) on
+real testnet accounts before any escalón 2 (`WU6`/`WU7`) work starts.
