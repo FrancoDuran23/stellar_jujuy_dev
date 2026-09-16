@@ -55,6 +55,20 @@ function rawPositiveIntegerRaw(defaultValue?: string) {
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 /**
+ * Treats an empty string as "unset" before handing the value to an optional
+ * schema. dotenv parses a bare `KEY=` line (exactly what `.env.example`
+ * ships for every stage-2-only variable) as `""`, not `undefined` — and
+ * zod's `.optional()` only ever accepts `undefined`, so a schema like
+ * `z.string().refine(...).optional()` rejects that `""` as a validation
+ * failure instead of treating the variable as not provided. Wrap every
+ * optional stage-2 field with this helper so a placeholder `KEY=` left in
+ * `.env` behaves the same as omitting the line entirely.
+ */
+function emptyToUndefined<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => (value === "" ? undefined : value), schema);
+}
+
+/**
  * Variables read identically by both processes (design 4.4). Defined once —
  * `PRICE_PER_MIB_RAW` and `CHANNEL_CONTRACT` used to also appear inside the
  * per-role tables and `.env.example`, which is exactly the duplication that
@@ -70,16 +84,18 @@ const sharedSchema = z.object({
   // Required in stage 2, unused in stage 1 — optional here, format-checked
   // when present. A later work unit (WU6) enforces "required once the
   // process operates in stage 2 mode".
-  CHANNEL_CONTRACT: z
-    .string()
-    .refine(isStellarContractId, "must be a 56-char Soroban contract id starting with C")
-    .optional(),
+  CHANNEL_CONTRACT: emptyToUndefined(
+    z
+      .string()
+      .refine(isStellarContractId, "must be a 56-char Soroban contract id starting with C")
+      .optional(),
+  ),
   // No default on purpose (design 4.4): an unset price must never be
   // silently treated as free or as an invented fallback.
   PRICE_PER_MIB_RAW: rawPositiveIntegerRaw(),
   DATA_DIR: z.string().min(1).default("./data"),
   LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
-  BACKEND_EVENTS_URL: z.url().optional(),
+  BACKEND_EVENTS_URL: emptyToUndefined(z.url().optional()),
   EXPLORER_BASE_URL: z.url().default(DEFAULT_EXPLORER_BASE_URL),
 });
 
@@ -95,11 +111,15 @@ const serverSchema = sharedSchema.extend({
   FEE_PAYER_SECRET: z
     .string()
     .refine(isStellarSecretSeed, "must be a 56-char secret seed starting with S"),
-  COMMITMENT_PUBKEY: z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
-  FUNDER_ACCOUNT: z
-    .string()
-    .refine(isStellarAccountId, "must be a 56-char account id starting with G")
-    .optional(),
+  COMMITMENT_PUBKEY: emptyToUndefined(
+    z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
+  ),
+  FUNDER_ACCOUNT: emptyToUndefined(
+    z
+      .string()
+      .refine(isStellarAccountId, "must be a 56-char account id starting with G")
+      .optional(),
+  ),
   SETTLE_THRESHOLD_BPS: z.coerce.number().int().min(1).max(10000).default(5000),
   CHANNEL_POLL_INTERVAL_MS: z.coerce.number().int().min(5000).default(30000),
   CLOSE_MONITOR_LOOKBACK_LEDGERS: z.coerce.number().int().min(1).default(120),
@@ -118,7 +138,9 @@ const agentSchema = sharedSchema.extend({
   SIGNER_SECRET: z
     .string()
     .refine(isStellarSecretSeed, "must be a 56-char secret seed starting with S"),
-  COMMITMENT_SECRET: z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
+  COMMITMENT_SECRET: emptyToUndefined(
+    z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
+  ),
   MAX_DELTA_PER_REQUEST_RAW: rawPositiveIntegerRaw("5000000"),
   METER_REPORT_INTERVAL_MS: z.coerce.number().int().min(1).default(10000),
   // Bounds `depositPort.getDepositRaw`/`signer.sign` while `POST /vouchers`

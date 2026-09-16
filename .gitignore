@@ -5,3 +5,4 @@ node_modules/
 .atl/
 *.log
 data/
+.playwright-mcp/

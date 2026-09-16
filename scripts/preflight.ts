@@ -8,6 +8,13 @@
 // directly, so it is fully testable with a fake. Only the CLI entrypoint at
 // the bottom of this file wires up the real, Horizon-backed port.
 
+// Loads `.env` the same way `src/server/main.ts` and `src/agent/main.ts` do.
+// Without this, `parseServerEnv(process.env)` below only ever sees whatever
+// is already exported in the shell — the runbook's `npm run preflight`
+// (docs/sdd/payments-mpp.md §6, T8.2 step 4) expects it to read the same
+// `.env` file the server and agent use.
+import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import { describeMissingTrustline, type TrustlinePort } from "../src/shared/stellar/trustline.ts";
 
 export type PreflightAccountRole = "recipient" | "funder";
@@ -67,7 +74,15 @@ export function printPreflightResult(result: PreflightResult, log: typeof consol
 // gates it lives in Horizon account balances, not in Soroban RPC account
 // state — so this is the one place this script talks to Horizon instead of
 // Soroban RPC.
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// Guarded the same way `src/agent/main.ts` guards its own entrypoint check:
+// `import.meta.url === \`file://${process.argv[1]}\`` never matches on
+// Windows, where `import.meta.url` is `file:///D:/...` (three slashes plus a
+// drive letter) while the naive template literal only ever produces
+// `file:///argv1` with no drive-letter normalization — so `npm run preflight`
+// silently ran nothing on Windows. `pathToFileURL` normalizes the drive
+// letter and slash count on every platform.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [{ Horizon }, { parseServerEnv }, { HORIZON_URLS }] = await Promise.all([
     import("@stellar/stellar-sdk"),
     import("../src/config/env.ts"),

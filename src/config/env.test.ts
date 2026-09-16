@@ -107,3 +107,38 @@ test("both roles reject a decimal or non-digit PRICE_PER_MIB_RAW", () => {
   assert.equal(parseServerEnv({ ...validServerEnv, PRICE_PER_MIB_RAW: "0.5" }).ok, false);
   assert.equal(parseAgentEnv({ ...validAgentEnv, PRICE_PER_MIB_RAW: "abc" }).ok, false);
 });
+
+// dotenv parses a bare `KEY=` line (exactly what .env.example ships for every
+// stage-2-only variable) as `""`, not `undefined`. zod's `.optional()` only
+// ever accepts `undefined`, so without the `emptyToUndefined` preprocessing
+// these placeholder lines made an otherwise-valid stage-1 `.env` fail to
+// parse.
+test("parseServerEnv treats an empty-string optional variable as unset, not invalid", () => {
+  const result = parseServerEnv({
+    ...validServerEnv,
+    CHANNEL_CONTRACT: "",
+    COMMITMENT_PUBKEY: "",
+    FUNDER_ACCOUNT: "",
+    BACKEND_EVENTS_URL: "",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.CHANNEL_CONTRACT, undefined);
+  assert.equal(result.value.COMMITMENT_PUBKEY, undefined);
+  assert.equal(result.value.FUNDER_ACCOUNT, undefined);
+  assert.equal(result.value.BACKEND_EVENTS_URL, undefined);
+});
+
+test("parseAgentEnv treats an empty-string optional variable as unset, not invalid", () => {
+  const result = parseAgentEnv({
+    ...validAgentEnv,
+    COMMITMENT_SECRET: "",
+    CHANNEL_CONTRACT: "",
+    BACKEND_EVENTS_URL: "",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.COMMITMENT_SECRET, undefined);
+  assert.equal(result.value.CHANNEL_CONTRACT, undefined);
+  assert.equal(result.value.BACKEND_EVENTS_URL, undefined);
+});
