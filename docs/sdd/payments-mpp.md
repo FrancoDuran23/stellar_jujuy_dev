@@ -1378,28 +1378,28 @@ Commit: `feat: add fail-closed boot, readiness middleware, and webhook events` �
 
 Commit: `feat(agent): add POST /vouchers with idempotency and mutex coalescing` · Líneas estimadas: 275
 
-- [ ] **T5.1** — `agent/mutex.ts` (`withChannelLock`)
+- [x] **T5.1** — `agent/mutex.ts` (`withChannelLock`)
   - Ejecutor: agente
   - Archivos: src/agent/mutex.ts, src/agent/mutex.test.ts
   - Cumple: VE-R12
   - Pruebas: dos llamadas concurrentes al mismo canal se serializan; canales distintos no se bloquean entre sí
   - Depende de: T0.1
   - Líneas estimadas: 40
-- [ ] **T5.2** — `agent/guardrails.ts`
+- [x] **T5.2** — `agent/guardrails.ts`
   - Ejecutor: agente
   - Archivos: src/agent/guardrails.ts, src/agent/guardrails.test.ts
   - Cumple: AC-R2, AC-R3, AC-R7
   - Pruebas: recálculo exacto vs `cumulativeAmount` recibido → `amount_rejected` si difiere; delta > `MAX_DELTA_PER_REQUEST_RAW` → `amount_rejected`
   - Depende de: T1.1
   - Líneas estimadas: 55
-- [ ] **T5.3** — `agent/routes` `POST /vouchers`
+- [x] **T5.3** — `agent/routes` `POST /vouchers`
   - Ejecutor: agente
   - Archivos: src/agent/app.ts (ruta), src/agent/routes/vouchers.ts
   - Cumple: VE-R1, VE-R2, VE-R6, VE-R9, VE-R10, VE-R11, VE-R13
   - Pruebas: `X-Gateway-Token` ausente/incorrecto → 401; igual → `reused:true`; mayor → vale nuevo; menor → `stale_reading`
   - Depende de: T1.2, T5.1, T5.2
   - Líneas estimadas: 130
-- [ ] **T5.4** — Tests de concurrencia y coalescencia
+- [x] **T5.4** — Tests de concurrencia y coalescencia
   - Ejecutor: agente
   - Archivos: src/agent/routes/vouchers.test.ts
   - Cumple: escenario 3.2 "dos lecturas concurrentes del mismo canal"; coalescencia de 4.3
@@ -1606,6 +1606,8 @@ Todas `agente`, todas sin acceso a testnet real (usan los puertos `ChannelPort`/
 
 **Progreso real (Lote B, 2026-09-15)**: T3.1-T3.4 y T4.1-T4.3 cerrados (ver checkboxes arriba y §6 para detalle, hallazgos del SDK, comandos y desviaciones). Restante del primer lote (T5.1-T5.4, `POST /vouchers`) pendiente para el próximo batch de `sdd-apply`. La compuerta dura de escalón 1 (**T8.2**, humano) sigue sin cerrarse — WU6/WU7 permanecen bloqueadas independientemente de cuántos batches de agente corran antes.
 
+**Progreso real (Lote C, 2026-09-15)**: correcciones de revisión sobre `persistence/` y `shared/` cerradas, y T5.1-T5.4 (`POST /vouchers`, escalón 1.5) cerrados — ver checkboxes arriba y §6 para detalle, hallazgos y desviaciones. La compuerta dura de escalón 1 (**T8.2**, humano) sigue sin cerrarse — WU6/WU7 permanecen bloqueadas.
+
 ## 6. Implementación
 
 ### Lote A — WU0, WU1, WU2 (2026-09-15)
@@ -1727,3 +1729,50 @@ Resuelto leyendo `node_modules/@stellar/mpp/{README.md,dist/**/*.d.ts,dist/charg
 7. Terminal 2: `npm run agent` — hace exactamente un cobro y termina. La salida esperada es una línea `{"level":"info","msg":"stage 1 purchase settled","txHash":"...","explorerUrl":"...","network":"stellar:testnet"}`.
 8. Pegar en `docs/payments-sdd.md` (evidencia §14.3): el `txHash` y el `explorerUrl` de la salida del paso 7, más la línea `charge.settled` que imprime la Terminal 1 (stdout del server), y confirmar en el explorador (`stellar.expert`) que la transacción existe y que el balance USDC de `STELLAR_RECIPIENT` aumentó. Confirmar también que el balance XLM de la cuenta de `SIGNER_SECRET` no cambió (S1-R3) comparando el balance antes/después con `stellar-cli` o el explorador.
 9. Marcar **T8.2** como `[x]` en la sección de tareas (§5, WU8) recién cuando los tres elementos de evidencia (hash visible, `charge.settled` en stdout, balance XLM del agent sin cambios) estén confirmados — no antes, y no basta con que los tests unitarios estén en verde (S1-R7 lo dice explícitamente).
+
+### Lote C — correcciones de revisión y WU5 (2026-09-15)
+
+Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a testnet real. Cubre las cinco correcciones de la revisión adversarial sobre `persistence/` y `shared/`, más `T5.1-T5.4` completo (`POST /vouchers`, escalón 1.5 contra consumo simulado).
+
+**Correcciones de revisión.**
+
+1. **`persistence/voucher-log.ts` (MAJOR)** — tres bugs relacionados. `append()` escribía `line + "\n"` con un solo `fs.writeSync` ignorando `bytesWritten`; ahora hace loop hasta escribir el buffer completo. `open()` no verificaba que el archivo terminara en `"\n"` antes de devolver el fd de append: si el último registro válido no tenía newline final (p. ej. un proceso murió justo después del `writeSync` pero antes del siguiente append), el próximo append se pegaba al anterior, el caller respondía `200 signed`, y al reabrir esa línea pegada quedaba corrupta-y-última, así que el archivo entero se truncaba — se perdían los dos vales. Fix: `open()` ahora detecta un archivo no vacío sin `"\n"` final y lo repara antes de devolver el fd (WARN `voucher_log_missing_trailing_newline`). Además, el `fs.truncateSync` que descartaba una línea final corrupta ahora primero mueve esos bytes a un sidecar `<log>.corrupt-<timestamp>-<nonce>` (WARN `voucher_log_trailing_line_discarded`) en vez de tirarlos: la cola corrupta es evidencia forense, no basura. Pruebas nuevas: archivo sin newline final → append → reapertura conserva ambos vales; línea final corrupta va al sidecar y el registro válido más alto sobrevive; archivo vacío se abre limpio; una línea con acumulado MENOR escrita fuera de orden en disco nunca hace retroceder el índice.
+2. **`shared/retry.ts` (MINOR)** — solo los sleeps estaban acotados, no el tiempo total de una llamada (una llamada colgada podía consumir todo el intervalo del medidor sin que `withRetry` lo notara). Se agregaron `deadlineMs` (chequeado antes de cada intento y antes de cada sleep) y `attemptTimeoutMs` (acota cada intento individual con una carrera contra un timer), más una nueva `RetryDeadlineExceededError`. Se corrigió además que `RETRY_MAX_DELAY_MS` (4000ms) era inalcanzable bajo la configuración por default (4 intentos, base 250ms, factor 2 → el sleep más largo real es 1000ms en el intento 2, muy por debajo de 4000): se bajó el tope a 1000ms, exactamente el techo natural de la secuencia documentada 250/500/1000, y se corrigió el comentario obsoleto de "~5,5s peor caso" (matemáticamente nunca fue así con esos parámetros; el peor caso real de los sleeps es ~1,75s, y ahora `deadlineMs`/`attemptTimeoutMs` son los que de verdad acotan el tiempo total end-to-end, no la aritmética del backoff). Pruebas nuevas para deadline (antes del primer intento y antes de un sleep) y para el timeout por intento.
+3. **`shared/messages.ts` (MINOR)** — `rawAmountSchema` aceptaba ceros a la izquierda (`"007"`) y no acotaba el máximo i128; ahora exige `/^(0|[1-9]\d*)$/` y `<= 2n**127n - 1n` (con el mismo guard de re-chequeo de formato antes de `BigInt()` que ya usaba `config/env.ts`, para no convertir un fallo de regex en una `SyntaxError` cruda). `message1Schema` es ahora `.strict()` (VE-R2: una clave desconocida es `400`, nunca se ignora en silencio). `observedAt` acepta `z.iso.datetime({ offset: true })` en vez de exigir solo UTC. Nit de la revisión: se dedupe `NETWORKS` y el chequeo de contract id importando `shared/stellar/network.ts` y `shared/stellar/keys.ts::isStellarContractId` en vez de redeclararlos.
+4. **`persistence/cursor.ts` (MINOR)** — `readCursor` devolvía `undefined` en silencio ante JSON inválido o un shape que no matchea el schema; ahora emite un WARN estructurado (mismo formato que `voucher-log.ts`) en los tres casos: JSON inválido, shape inválido, y un nuevo caso — cursor de un canal distinto al esperado (`expectedChannel`, parámetro opcional nuevo). Esto último previene que el monitor de `close_start` (WU6) siga un `lastLedger` que no corresponde al canal activo si `DATA_DIR` se reusa entre canales.
+5. **Nit de fixtures** — `voucher-log.test.ts` y `cursor.test.ts` usaban `"CB1234567890"` (13 caracteres) como canal; ahora usan un contract id de 56 caracteres con forma real (`C` + 55 caracteres `[A-Z2-7]`), igual que el resto de la suite.
+
+**WU5 — `POST /vouchers` (escalón 1.5).** Cuatro archivos nuevos en `src/agent/`: `mutex.ts` (`createChannelMutex`, T5.1) es una cadena de promesas por canal en un `Map`, sin dependencia externa — dos llamadas al mismo canal se serializan, canales distintos nunca se bloquean entre sí, y un fallo en una llamada nunca envenena la cadena para la siguiente. `guardrails.ts` (`checkGuardrails`, T5.2) recalcula `computeExpectedAmountRaw` y exige igualdad exacta contra `cumulativeAmount` (AC-R2/AC-R3), y rechaza un delta contra el último acumulado firmado que supere `MAX_DELTA_PER_REQUEST_RAW` (AC-R7). `signer.ts` es la desviación documentada que pidió el encargo: el firmante ed25519 real (`COMMITMENT_SECRET`, XDR de canal) es trabajo de WU6 y necesita un canal real — `SignerPort` define el puerto (`sign({channel, network, cumulativeAmount}) -> {signature, commitmentPubkey}`) y `createFakeSigner()` es una implementación determinística (sha512/sha256, nunca el SDK) que preserva la propiedad de determinismo de ed25519 (RFC 8032) de la que depende la idempotencia (VE-R9) y la coalescencia. `src/agent/routes/vouchers.ts` (T5.3, T5.4) es el endpoint en sí, dividido en dos capas como `server/charge-service.ts` + `routes/charge.ts`: `createVoucherService` es lógica pura (mutex + coalescencia + guardrails + firma + persistencia + evento `usage.voucher_signed`) y `createVouchersRoute` es el adaptador Express (token, schema, mapeo de status). La tabla de idempotencia (VE-R9/VE-R10/VE-R11) se resuelve comparando contra `voucherLog.getHighest(channel)`: igual → `reused:true` sin nueva línea; mayor → nuevo vale, reemplaza al anterior; menor → `stale_reading`, `retryable:false`, nada se firma o persiste. La coalescencia (diseño 4.3) agrupa en un `Map<channel, PendingEntry[]>` toda request que llega mientras el mutex del canal ya tiene una ejecución en curso; al liberarse el lock se clasifica cada miembro del batch (igual/menor/rechazado se resuelven individualmente; los candidatos válidos — mayor al anterior y con guardrails en verde — compiten por el máximo) y se firma **una sola vez** por el máximo, distribuyendo ese mismo vale a los demás candidatos con `reused:true`. El cross-check de monto usa exclusivamente `buildUnsigned()` para las respuestas sin firmar, y el status HTTP sale de `REASONS` (200 para todos los resultados de negocio de esta ruta; 503 solo si un error inesperado del signer/voucherLog cae en `internal_error`, que nunca debería pasar con el fake signer). `remaining` sale de un `ChannelDepositPort` inyectable (`createStaticDepositPort`, default = máximo i128, "depósito prácticamente ilimitado" para esta etapa) — el tracker real respaldado por el contrato (`agent/channel-cache.ts`) es WU6.
+
+**FC-R3 (desviación 6 del Lote B, cerrada).** `config/boot.ts` agrega `buildAgentVouchersInstance(env, deps)` y `createAgentBoot(options)`, espejando `buildServerChargeInstance`/`createServerBoot`: abre el voucher log del agent y, si `VoucherLog.open()` devuelve `status: "corrupt"`, la instancia queda `unavailable` con `reason: "voucher_log_corrupt"` — exactamente la condición de FC-R3 que quedó sin cablear en el Lote B porque su primer consumidor real era WU5. `agent/app.ts` ahora recibe `{ boot: FailClosedBoot<VoucherService>, gatewayToken }`, monta `/vouchers` detrás de `requireReady` (reusa `server/middleware/require-ready.ts`, que ya era genérico) y lee la instancia viva de `boot.getState()` en cada request (mismo patrón que `createLiveChargePort` en `server/app.ts`), para que un re-arme (FC-R8) se recoja sin volver a registrar la ruta.
+
+**Comandos ejecutados (resultado final):**
+
+| Comando | Resultado |
+|---|---|
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 182/182 tests en verde (131 antes del Lote C; +16 en `persistence`/`shared` por las correcciones de revisión, +35 nuevos entre `agent/mutex.test.ts`, `agent/guardrails.test.ts`, `agent/signer.test.ts`, `agent/routes/vouchers.test.ts`, `agent/app.test.ts` y `config/boot.test.ts`) |
+| `npm run verify:deps` | `single resolved version for every pinned package` |
+
+**Commits:**
+
+- `d74a4ec` — `fix(persistence): guard voucher log against glued lines and lost tail` (hallazgo 1)
+- `522a6ff` — `fix(shared): harden M1 schema, retry deadline and cursor diagnostics` (hallazgos 2-5)
+- (WU5 y docs: ver hashes en el historial inmediatamente posterior a este texto)
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`src/agent/routes/vouchers.ts` no está en la carpeta que muestra el árbol de 4.1** (que no listaba `routes/` para `agent/`), pero sí es exactamente el archivo que pide T5.3 ("Archivos: ... src/agent/routes/vouchers.ts"). Se siguió la tarea, más específica y más reciente que el árbol ilustrativo de 4.1.
+2. **`RETRY_MAX_DELAY_MS` bajó de 4000ms a 1000ms** (hallazgo 2 arriba) — un valor congelado en el diseño (4.5) que resultó ser inalcanzable con los otros parámetros también congelados (`RETRY_MAX_ATTEMPTS=4`, base 250ms). Se documenta acá en vez de tocar 4.5 directamente porque el comportamiento observable (cuántas veces se reintenta y con qué cadencia) no cambia — solo el techo defensivo de un caso límite que el loop por default nunca alcanzaba.
+3. **`ChannelDepositPort`/`createStaticDepositPort` son un stand-in, no el `agent/channel-cache.ts` del diseño 4.1.** WU5 es "escalón 1.5 contra consumo simulado": no hay un canal real todavía. El default (máximo i128) hace que `remaining` esté siempre bien definido sin inventar un umbral de agotamiento no pedido por T5.3 (cuyo `Cumple` no incluye ningún `CL-R`). `channel_exhausted`/`channel_not_found`/`channel_not_open`/`channel_closing` quedan fuera de esta ruta hasta que WU6 conecte un depósito real.
+4. **`agent/main.ts` no fue tocado.** T5.3 solo lista `src/agent/app.ts` y `src/agent/routes/vouchers.ts` como archivos; `createAgentApp`/`createAgentBoot` quedan completos y probados, pero el proceso CLI real (`npm run agent`) sigue haciendo únicamente el cobro puntual de escalón 1. Falta cablear `app.listen()` + `createAgentBoot()` en `main.ts` para que el agent corra de verdad como servidor — ver "Puntos abiertos".
+5. **Comparación de `X-Gateway-Token` en tiempo constante** se implementó hasheando ambos lados con SHA-256 antes de `crypto.timingSafeEqual` (evita que `timingSafeEqual` tire por longitudes distintas, sin revelar el largo real del token por un camino de salida anticipado).
+
+**Descubrimientos no obvios:** la coalescencia (diseño 4.3) solo es determinística en un test si las N requests concurrentes se emiten en el mismo tick de JS — sobre un socket HTTP real no hay garantía de que lleguen todas antes de que el microtask del mutex empiece a procesar el batch. Por eso `vouchers.test.ts` prueba la coalescencia llamando `createVoucherService(...).handle(...)` directamente con `Promise.all(...)` (sin pasar por Express/HTTP) para T5.4, y reserva las pruebas HTTP reales para auth/schema/channel-required, que no dependen de timing. Guardado en Engram como discovery.
+
+**Puntos abiertos para el próximo lote (WU6 en adelante):**
+
+- Cablear `agent/main.ts` para que arranque como servidor real: `app.listen()` antes de `createAgentBoot()` (FC-R1), y publicar `GET /health` + `POST /vouchers` de punta a punta — hoy `createAgentApp`/`createAgentBoot` están completos y probados pero nada los invoca desde el entrypoint del proceso.
+- WU6 debe reemplazar `agent/signer.ts::createFakeSigner()` por el firmante ed25519 real sobre `COMMITMENT_SECRET`, detrás del mismo `SignerPort` — `agent/routes/vouchers.ts` no debería necesitar ningún cambio, solo `config/boot.ts::buildAgentVouchersInstance` pasando el signer real en vez del fake.
+- WU6 debe reemplazar `createStaticDepositPort()` por `agent/channel-cache.ts` (getters del contrato: `deposited`, `balance`, `withdrawn`) y ahí sí cablear `channel_exhausted`/`channel_not_found`/`channel_not_open`/`channel_closing`, ninguno de los cuales tiene todavía una prueba en esta ruta.
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre **T8.2** (sin cambios respecto al Lote B).
