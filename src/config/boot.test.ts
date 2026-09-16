@@ -3,17 +3,20 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Keypair } from "@stellar/stellar-sdk";
 import {
   buildAgentVouchersInstance,
+  buildServerChannelInstance,
   createAgentBoot,
   createFailClosedBoot,
   createServerBoot,
+  createServerChannelBoot,
   toM2Reason,
   type BuildResult,
   type UnavailableReason,
 } from "./boot.ts";
 import type { ChargePort } from "../server/charge-service.ts";
-import { parseAgentEnv } from "./env.ts";
+import { parseAgentEnv, parseServerEnv } from "./env.ts";
 
 const fakeChargePort: ChargePort = {
   async handle() {
@@ -197,6 +200,83 @@ test("createServerBoot: RPC-down (from buildChargeInstance) surfaces as upstream
   if (state.status !== "unavailable") return;
   assert.equal(state.reason, "upstream_unavailable");
   assert.equal(toM2Reason(state.reason), "upstream_unavailable");
+});
+
+// --- server: stage-2 channel instance (WU7) ---
+
+const CHANNEL = `C${"A".repeat(55)}`;
+const FEE_PAYER_KEYPAIR = Keypair.random();
+
+function makeChannelTempDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "boot-channel-test-"));
+}
+
+function validServerChannelRawEnv(dataDir: string): Record<string, string> {
+  return {
+    ...validServerRawEnv,
+    FEE_PAYER_SECRET: FEE_PAYER_KEYPAIR.secret(),
+    CHANNEL_CONTRACT: CHANNEL,
+    COMMITMENT_PUBKEY: "a".repeat(64),
+    FUNDER_ACCOUNT: "G".padEnd(56, "B"),
+    DATA_DIR: dataDir,
+  };
+}
+
+test("createServerChannelBoot: unavailable/config_invalid when stage 2 is not configured", async () => {
+  const boot = createServerChannelBoot({ rawEnv: validServerRawEnv });
+  const state = await boot.ensureReady();
+  assert.equal(state.status, "unavailable");
+  if (state.status !== "unavailable") return;
+  assert.equal(state.reason, "config_invalid");
+  assert.match(state.detail, /stage 2/);
+});
+
+test("buildServerChannelInstance: a corrupt voucher log (not the last line) becomes unavailable/voucher_log_corrupt", async () => {
+  const dir = makeChannelTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-server-testnet.jsonl");
+  fs.writeFileSync(voucherLogPath, '{"not":"valid"}\nnot json at all\n{"v":1}\n');
+
+  const parsed = parseServerEnv(validServerChannelRawEnv(dir));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.ok(parsed.value.CHANNEL_CONTRACT && parsed.value.COMMITMENT_PUBKEY && parsed.value.FUNDER_ACCOUNT);
+
+  const result = await buildServerChannelInstance(
+    parsed.value as typeof parsed.value & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
+    { voucherLogPath },
+  );
+  assert.equal(result.status, "unavailable");
+  if (result.status !== "unavailable") return;
+  assert.equal(result.reason, "voucher_log_corrupt");
+});
+
+test("buildServerChannelInstance: a healthy voucher log goes ready with a channelService and closeMonitor", async () => {
+  const dir = makeChannelTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-server-testnet.jsonl");
+
+  const parsed = parseServerEnv(validServerChannelRawEnv(dir));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const result = await buildServerChannelInstance(
+    parsed.value as typeof parsed.value & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
+    { voucherLogPath },
+  );
+  assert.equal(result.status, "ready");
+  if (result.status !== "ready") return;
+  assert.equal(typeof result.instance.channelService.verifyAndAccept, "function");
+  assert.equal(typeof result.instance.closeMonitor.start, "function");
+  // Never started automatically — server/main.ts decides when.
+  assert.equal(result.instance.closeMonitor.getState().running, false);
+});
+
+test("createServerChannelBoot: a malformed FEE_PAYER_SECRET checksum becomes unavailable/config_invalid, never an uncaught rejection (FC-R2)", async () => {
+  const dir = makeChannelTempDir();
+  const boot = createServerChannelBoot({
+    rawEnv: { ...validServerChannelRawEnv(dir), FEE_PAYER_SECRET: "S".padEnd(56, "A") },
+  });
+  const state = await boot.ensureReady();
+  assert.equal(state.status, "unavailable");
 });
 
 // --- agent: FC-R3, batch B deviation 6 ("voucher log no abrible en modo

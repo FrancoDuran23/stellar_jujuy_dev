@@ -37,9 +37,24 @@ import {
   prepareCommitmentBytes,
   signCommitmentBytes,
   tryGetDepositedRaw,
+  verifyCommitmentSignature,
   type ChannelContractDeps,
 } from "../shared/stellar/channel-contract.ts";
-import { getChannelState } from "@stellar/mpp/channel/server";
+import { close as closeChannelOnChain, getChannelState, watchChannel } from "@stellar/mpp/channel/server";
+import { Horizon } from "@stellar/stellar-sdk";
+import { getSep41BalanceRaw } from "../shared/stellar/channel-contract.ts";
+import type { TrustlinePort } from "../shared/stellar/trustline.ts";
+import {
+  createChannelService,
+  type ChannelChainInfo,
+  type ChannelClosePort,
+  type ChannelService,
+  type ChannelStatePort,
+  type ChannelVerifyPort,
+  type UsdcBalancePort,
+} from "../server/channel-service.ts";
+import { createChannelVoucherStore } from "../server/channel-store.ts";
+import { createCloseMonitor, type CloseMonitor, type CloseWatchPort } from "../server/close-monitor.ts";
 
 const AMOUNT_DECIMALS = 7;
 
@@ -354,6 +369,275 @@ export function createServerBoot(options?: {
         return { status: "unavailable", reason: "config_invalid", detail: parsed.detail };
       }
       return buildChargeInstance(parsed.value);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2, server side (WU7): channel verification + close ports, all built
+// with the real SDK here and nowhere else (design 4.1's testability rule).
+// ---------------------------------------------------------------------------
+
+/** Real `ChannelStatePort` (`server/channel-service.ts`, `server/
+ * close-monitor.ts`): the richer sibling of `createStellarChannelRpcPort`
+ * above (adds `balanceRaw`/`currentLedger`, needed for the close-monitor's
+ * backup invariant and the close flow's refund math). Never throws — an RPC
+ * failure reports `{found: false}` (spike's XDR-crash finding: every
+ * request-serving RPC call must degrade, never crash). */
+export function createServerChannelStatePort(env: {
+  SOROBAN_RPC_URL: string;
+  STELLAR_NETWORK: ChannelContractDeps["network"];
+  DATA_DIR: string;
+}): ChannelStatePort {
+  const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
+  return {
+    async getChannelInfo(channel): Promise<ChannelChainInfo> {
+      try {
+        const state = await getChannelState({ channel, network: env.STELLAR_NETWORK, rpcUrl: env.SOROBAN_RPC_URL });
+        let depositRaw = await tryGetDepositedRaw(channelDeps, channel);
+        if (depositRaw === undefined) {
+          const record = readChannelRecord(channelRecordPath(env.DATA_DIR, env.STELLAR_NETWORK));
+          depositRaw = record !== undefined && record.channel === channel ? BigInt(record.depositRaw) : state.balance;
+        }
+        return {
+          found: true,
+          depositRaw,
+          balanceRaw: state.balance,
+          closeEffectiveAtLedger: state.closeEffectiveAtLedger,
+          currentLedger: state.currentLedger,
+        };
+      } catch {
+        return { found: false };
+      }
+    },
+  };
+}
+
+/** Real `ChannelVerifyPort`: the exact recipe `@stellar/mpp`'s server
+ * verifies with internally (simulate `prepare_commitment`, verify locally
+ * against `COMMITMENT_PUBKEY` — spike Part A), hand-implemented here since
+ * the SDK's own verification is only reachable through its Method/Credential
+ * wire protocol (see `server/channel-store.ts`'s deviation note). */
+export function createServerChannelVerifyPort(
+  env: { SOROBAN_RPC_URL: string; STELLAR_NETWORK: ChannelContractDeps["network"] },
+  commitmentPubkeyHex: string,
+): ChannelVerifyPort {
+  const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
+  return {
+    async verifyCommitment({ channel, amountRaw, signatureHex }) {
+      const bytes = await prepareCommitmentBytes(channelDeps, channel, amountRaw);
+      try {
+        assertCommitmentBinds(bytes, { channel, amount: amountRaw, network: env.STELLAR_NETWORK });
+      } catch {
+        return false;
+      }
+      return verifyCommitmentSignature(commitmentPubkeyHex, bytes, signatureHex);
+    },
+  };
+}
+
+/** Real `ChannelClosePort`: wraps `@stellar/mpp/channel/server`'s standalone
+ * `close()` export — the ONLY function in this codebase that submits a
+ * `close` transaction (task requirement enforced structurally: nothing else
+ * imports `closeChannelOnChain`). */
+export function createServerChannelClosePort(env: {
+  SOROBAN_RPC_URL: string;
+  STELLAR_NETWORK: ChannelContractDeps["network"];
+  FEE_PAYER_SECRET: string;
+}): ChannelClosePort {
+  const envelopeSigner = Keypair.fromSecret(env.FEE_PAYER_SECRET);
+  return {
+    async close({ channel, amountRaw, signatureHex }) {
+      const txHash = await closeChannelOnChain({
+        channel,
+        amount: amountRaw,
+        signature: Buffer.from(signatureHex, "hex"),
+        feePayer: { envelopeSigner },
+        network: env.STELLAR_NETWORK,
+        rpcUrl: env.SOROBAN_RPC_URL,
+      });
+      return { txHash };
+    },
+  };
+}
+
+/** Real `UsdcBalancePort`: SEP-41 `balance(address)` on `USDC_SAC_CONTRACT`
+ * (CL-R10's pre/post balance-delta assertion). */
+export function createUsdcBalancePort(env: {
+  SOROBAN_RPC_URL: string;
+  STELLAR_NETWORK: ChannelContractDeps["network"];
+  USDC_SAC_CONTRACT: string;
+}): UsdcBalancePort {
+  const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
+  return {
+    getUsdcBalanceRaw: (accountId) => getSep41BalanceRaw(channelDeps, env.USDC_SAC_CONTRACT, accountId),
+  };
+}
+
+/** Real Horizon-backed `TrustlinePort` (CL-R9) — same recipe
+ * `scripts/preflight.ts` already uses. */
+export function createHorizonTrustlinePort(horizonUrl: string): TrustlinePort {
+  const horizon = new Horizon.Server(horizonUrl);
+  return {
+    async hasUsdcTrustline(accountId) {
+      try {
+        const account = await horizon.loadAccount(accountId);
+        return account.balances.some((balance) => "asset_code" in balance && balance.asset_code === "USDC");
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+const HORIZON_URLS: Record<ChannelContractDeps["network"], string> = {
+  "stellar:testnet": "https://horizon-testnet.stellar.org",
+  "stellar:pubnet": "https://horizon.stellar.org",
+};
+
+/** Real `CloseWatchPort`: wraps `@stellar/mpp/channel/server`'s
+ * `watchChannel()`. Any `close`-topic event (pending or already-effective —
+ * spike's own note that the topic alone cannot tell them apart) is treated
+ * as the dispute signal; `onError` here matches the spike's own finding
+ * (an unrelated ledger's XDR can crash a long-lived polling loop on this
+ * SDK version) — recorded, never rethrown. */
+export function createWatchChannelPort(
+  channel: string,
+  env: { SOROBAN_RPC_URL: string; STELLAR_NETWORK: ChannelContractDeps["network"] },
+): CloseWatchPort {
+  return {
+    watch(onEvent, onError) {
+      try {
+        return watchChannel({
+          channel,
+          network: env.STELLAR_NETWORK,
+          rpcUrl: env.SOROBAN_RPC_URL,
+          onEvent: (event) => {
+            if (event.type === "close") onEvent();
+          },
+          onError,
+        });
+      } catch (error) {
+        onError(error);
+        return () => {};
+      }
+    },
+  };
+}
+
+export type ServerChannelInstance = {
+  channelService: ChannelService;
+  closeMonitor: CloseMonitor;
+};
+
+/**
+ * Composes the server's stage-2 channel instance (WU7): the accepted-
+ * commitment store (rebuilt from `data/vouchers-server-{network}.jsonl` at
+ * open time), the four real ports, `createChannelService`, and
+ * `createCloseMonitor` wired to call `channelService.closeChannel` on any
+ * detected dispute. Returns `unavailable` only for a voucher-log open
+ * failure (FC-R3) — every RPC-touching port degrades to a typed result
+ * instead of throwing, so this never needs its own health check the way
+ * `buildServerChargeInstance` does.
+ */
+export async function buildServerChannelInstance(
+  env: ServerEnv & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
+  deps: { voucherLogPath?: string; emit?: (input: EmitInput) => void } = {},
+): Promise<BuildResult<ServerChannelInstance>> {
+  const voucherLogPath =
+    deps.voucherLogPath ?? path.join(env.DATA_DIR, `vouchers-server-${env.STELLAR_NETWORK}.jsonl`);
+  let opened: ReturnType<typeof VoucherLog.open>;
+  try {
+    opened = VoucherLog.open(voucherLogPath);
+  } catch (error) {
+    return { status: "unavailable", reason: "voucher_log_corrupt", detail: messageOf(error) };
+  }
+  if (opened.status === "corrupt") {
+    return { status: "unavailable", reason: opened.reason, detail: opened.detail };
+  }
+
+  const channel = env.CHANNEL_CONTRACT;
+  try {
+    const store = createChannelVoucherStore(opened.log);
+    const statePort = createServerChannelStatePort(env);
+    const verifyPort = createServerChannelVerifyPort(env, env.COMMITMENT_PUBKEY);
+    const closePort = createServerChannelClosePort(env);
+    const trustlinePort = createHorizonTrustlinePort(HORIZON_URLS[env.STELLAR_NETWORK]);
+    const usdcBalancePort = createUsdcBalancePort(env);
+
+    const channelService = createChannelService({
+      store,
+      verifyPort,
+      statePort,
+      closePort,
+      trustlinePort,
+      usdcBalancePort,
+      funderAccount: env.FUNDER_ACCOUNT,
+      closeAssertAttempts: env.CLOSE_ASSERT_ATTEMPTS,
+      closeAssertIntervalMs: env.CLOSE_ASSERT_INTERVAL_MS,
+      ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
+    });
+
+    const closeMonitor = createCloseMonitor({
+      channel,
+      statePort,
+      watchPort: createWatchChannelPort(channel, env),
+      pollIntervalMs: env.CHANNEL_POLL_INTERVAL_MS,
+      onClosingDetected: () => {
+        void channelService.closeChannel(channel);
+      },
+      ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
+    });
+
+    return { status: "ready", instance: { channelService, closeMonitor } };
+  } catch (error) {
+    return { status: "unavailable", reason: "config_invalid", detail: messageOf(error) };
+  }
+}
+
+/**
+ * Composes env parsing + `buildServerChannelInstance` + the fail-closed
+ * re-arm wrapper (same shape as `createServerBoot`/`createAgentBoot`).
+ * `server/main.ts` only calls `ensureReady()` — and only starts listening on
+ * `/channel/vouchers` / the close-monitor — once `env.CHANNEL_CONTRACT` is
+ * present (stage 2); a stage-1-only deployment never builds this at all.
+ */
+export function createServerChannelBoot(options?: {
+  rawEnv?: Record<string, string | undefined>;
+  retryIntervalMs?: number;
+  buildChannelInstance?: (
+    env: ServerEnv & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
+  ) => Promise<BuildResult<ServerChannelInstance>>;
+  now?: () => number;
+}): FailClosedBoot<ServerChannelInstance> {
+  const rawEnv = options?.rawEnv ?? process.env;
+  const buildChannelInstance = options?.buildChannelInstance ?? buildServerChannelInstance;
+
+  return createFailClosedBoot<ServerChannelInstance>({
+    retryIntervalMs: options?.retryIntervalMs ?? DEFAULT_INIT_RETRY_INTERVAL_MS,
+    ...(options?.now !== undefined ? { now: options.now } : {}),
+    buildInstance: async () => {
+      const parsed = parseServerEnv(rawEnv);
+      if (!parsed.ok) {
+        return { status: "unavailable", reason: "config_invalid", detail: parsed.detail };
+      }
+      if (
+        parsed.value.CHANNEL_CONTRACT === undefined ||
+        parsed.value.COMMITMENT_PUBKEY === undefined ||
+        parsed.value.FUNDER_ACCOUNT === undefined
+      ) {
+        return {
+          status: "unavailable",
+          reason: "config_invalid",
+          detail: "stage 2 is not configured (CHANNEL_CONTRACT/COMMITMENT_PUBKEY/FUNDER_ACCOUNT unset)",
+        };
+      }
+      return buildChannelInstance({
+        ...parsed.value,
+        CHANNEL_CONTRACT: parsed.value.CHANNEL_CONTRACT,
+        COMMITMENT_PUBKEY: parsed.value.COMMITMENT_PUBKEY,
+        FUNDER_ACCOUNT: parsed.value.FUNDER_ACCOUNT,
+      });
     },
   });
 }
