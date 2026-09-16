@@ -6,6 +6,7 @@
   "scripts": {
     "server": "node src/server/main.ts",
     "agent": "node src/agent/main.ts",
+    "agent:serve": "node src/agent/main.ts serve",
     "check": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\" \"scripts/**/*.test.ts\"",
     "verify:deps": "node scripts/verify-deps.mjs",
