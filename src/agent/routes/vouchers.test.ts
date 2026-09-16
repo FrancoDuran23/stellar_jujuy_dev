@@ -187,6 +187,57 @@ test("remaining is computed from the channel deposit", async () => {
   assert.equal(outcome.body.remaining, (depositRaw - 10_000n).toString());
 });
 
+test("a reading above the cached deposit is channel_exhausted, not amount_rejected (spec 3.6 scenario)", async () => {
+  const depositRaw = 100_000n;
+  const priceRaw = 100_000n; // makes cumulativeAmount == cumulativeBytes in MiB units easy to hit exactly
+  const service = makeService({
+    depositPort: createStaticDepositPort(depositRaw),
+    pricePerMibRaw: priceRaw,
+  });
+  // First reading exactly exhausts the deposit.
+  const first = await service.handle(m1({ cumulativeBytes: MIB, cumulativeAmount: "100000", meterReadingId: "mr_1" }));
+  assert.equal(first.body.status, "signed");
+
+  // A higher reading than the deposit is rejected as channel_exhausted, never amount_rejected.
+  const second = await service.handle(
+    m1({ cumulativeBytes: (MIB * 5n) / 4n, cumulativeAmount: "125000", meterReadingId: "mr_2" }),
+  );
+  assert.equal(second.status, 200);
+  assert.equal(second.body.status, "unsigned");
+  if (second.body.status !== "unsigned") return;
+  assert.equal(second.body.reason, "channel_exhausted");
+  assert.equal(second.body.retryable, false);
+  assert.equal(second.body.remaining, "0");
+});
+
+test("a closing channel rejects every request with channel_closing (CL-R8)", async () => {
+  const closingDepositPort: ChannelDepositPort = {
+    async getChannelInfo() {
+      return { status: "closing", depositRaw: 1_000_000n };
+    },
+  };
+  const service = makeService({ depositPort: closingDepositPort });
+  const outcome = await service.handle(m1());
+  assert.equal(outcome.body.status, "unsigned");
+  if (outcome.body.status !== "unsigned") return;
+  assert.equal(outcome.body.reason, "channel_closing");
+  assert.equal(outcome.body.retryable, false);
+});
+
+test("an unknown channel maps to channel_not_found", async () => {
+  const missingDepositPort: ChannelDepositPort = {
+    async getChannelInfo() {
+      return { status: "not_found" };
+    },
+  };
+  const service = makeService({ depositPort: missingDepositPort });
+  const outcome = await service.handle(m1());
+  assert.equal(outcome.body.status, "unsigned");
+  if (outcome.body.status !== "unsigned") return;
+  assert.equal(outcome.body.reason, "channel_not_found");
+  assert.equal(outcome.body.retryable, false);
+});
+
 test("an unexpected signer failure maps to internal_error, retryable:true (never an uncaught rejection)", async () => {
   const failingSigner: SignerPort = {
     async sign() {
@@ -334,9 +385,9 @@ test("a throw during classification (malformed persisted ts) settles 503 interna
   assert.equal(next.body.status, "signed");
 });
 
-test("a hanging depositPort.getDepositRaw times out as upstream_unavailable and releases the lock (review finding 7)", async () => {
+test("a hanging depositPort.getChannelInfo times out as upstream_unavailable and releases the lock (review finding 7)", async () => {
   const hangingDepositPort: ChannelDepositPort = {
-    getDepositRaw: () => new Promise(() => {}),
+    getChannelInfo: () => new Promise(() => {}),
   };
   const service = makeService({ depositPort: hangingDepositPort, portCallTimeoutMs: 20 });
 

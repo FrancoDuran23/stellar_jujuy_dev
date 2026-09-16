@@ -43,12 +43,29 @@ import { checkGuardrails } from "../guardrails.ts";
 import type { SignerPort } from "../signer.ts";
 
 /**
- * Stand-in for the real, contract-backed deposit tracker (`agent/
- * channel-cache.ts`, WU6). Deliberately minimal: WU5 ("escalón 1.5") has no
- * real channel contract to read `deposited` from yet.
+ * Channel lifecycle status as seen by the agent's local, cached view of the
+ * contract (WU6, `agent/channel-cache.ts`). Four states map 1:1 onto the M2
+ * `reason` vocabulary's channel-lifecycle entries (spec 3.6/3.7):
+ * `"open"` never fails on this alone; `"closing"` -> `channel_closing`;
+ * `"not_found"` -> `channel_not_found`; `"not_open"` -> `channel_not_open`.
+ * `depositRaw` is only meaningful for `"open"`/`"closing"` (exhaustion and
+ * `remaining` both need it); a not-found/not-open channel has no deposit to
+ * report.
+ */
+export type ChannelInfo =
+  | { status: "open"; depositRaw: bigint }
+  | { status: "closing"; depositRaw: bigint }
+  | { status: "not_found" }
+  | { status: "not_open" };
+
+/**
+ * Contract-backed deposit + lifecycle tracker (`agent/channel-cache.ts`,
+ * WU6, wraps a lower-level `ChannelRpcPort` with a short TTL cache).
+ * `createStaticDepositPort` below remains the WU5 ("escalón 1.5") stand-in
+ * for tests and any deployment with no real channel contract yet.
  */
 export type ChannelDepositPort = {
-  getDepositRaw(channel: string): Promise<bigint>;
+  getChannelInfo(channel: string): Promise<ChannelInfo>;
 };
 
 /** Effectively-unlimited deposit unless a test/deployment overrides it. */
@@ -56,8 +73,8 @@ export const DEFAULT_DEPOSIT_RAW = 2n ** 127n - 1n;
 
 export function createStaticDepositPort(depositRaw: bigint = DEFAULT_DEPOSIT_RAW): ChannelDepositPort {
   return {
-    async getDepositRaw() {
-      return depositRaw;
+    async getChannelInfo() {
+      return { status: "open", depositRaw };
     },
   };
 }
@@ -121,6 +138,7 @@ type PendingEntry = {
 type Classified =
   | { kind: "equal"; entry: PendingEntry }
   | { kind: "stale"; entry: PendingEntry }
+  | { kind: "exhausted"; entry: PendingEntry }
   | { kind: "rejected"; entry: PendingEntry; detail: string }
   | { kind: "candidate"; entry: PendingEntry; amount: bigint };
 
@@ -129,6 +147,7 @@ function classify(
   previous: VoucherIndexEntry | undefined,
   pricePerMibRaw: bigint,
   maxDeltaPerRequestRaw: bigint,
+  depositRaw: bigint,
 ): Classified {
   const amount = BigInt(entry.m1.cumulativeAmount);
   // With no previous voucher at all there is nothing to be "equal to" or
@@ -142,6 +161,14 @@ function classify(
     if (amount < previous.cumulativeAmountRaw) {
       return { kind: "stale", entry };
     }
+  }
+  // CL-R4/2.3.5: the agent cuts first against its cached deposit — signing a
+  // voucher above the deposit is signing something the server can never
+  // collect. Checked before guardrails so a channel that is simply out of
+  // budget is reported as `channel_exhausted` (FT-R4: never logged as an
+  // error, never retried), not `amount_rejected`.
+  if (amount > depositRaw) {
+    return { kind: "exhausted", entry };
   }
   const previousAmountRaw = previous?.cumulativeAmountRaw ?? 0n;
   const guardrailResult = checkGuardrails({
@@ -217,6 +244,18 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
     entry.resolve({ body, status });
   }
 
+  function resolveExhausted(entry: PendingEntry, previousAmountRaw: bigint, depositRaw: bigint): void {
+    const remaining = clampMin0(depositRaw - previousAmountRaw);
+    const { body, status } = buildUnsigned("channel_exhausted", {
+      sessionId: entry.m1.sessionId,
+      channel: entry.m1.channel,
+      remaining: remaining.toString(),
+      meterReadingId: entry.m1.meterReadingId,
+      detail: `requested cumulative ${entry.m1.cumulativeAmount} exceeds channel deposit ${depositRaw}`,
+    });
+    entry.resolve({ body, status });
+  }
+
   function resolveFailure(entry: PendingEntry, reason: Reason, detail: string): void {
     const { body, status } = buildUnsigned(reason, {
       sessionId: entry.m1.sessionId,
@@ -259,13 +298,13 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
 
     try {
       let previous: VoucherIndexEntry | undefined;
-      let depositRaw: bigint;
+      let channelInfo: ChannelInfo;
       try {
         previous = deps.voucherLog.getHighest(channel);
-        depositRaw = await withTimeout(
-          () => deps.depositPort.getDepositRaw(channel),
+        channelInfo = await withTimeout(
+          () => deps.depositPort.getChannelInfo(channel),
           portCallTimeoutMs,
-          "depositPort.getDepositRaw",
+          "depositPort.getChannelInfo",
         );
       } catch (error) {
         const reason: Reason = error instanceof TimeoutError ? "upstream_unavailable" : "internal_error";
@@ -273,9 +312,29 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
         for (const entry of batch) resolveFailure(entry, reason, detail);
         return;
       }
+
+      // CL-R8/CL-R6: a channel that is not open at all (never deployed, or
+      // mid unilateral exit) never reaches guardrails or signing — every
+      // entry in the batch gets the same lifecycle reason.
+      if (channelInfo.status === "not_found" || channelInfo.status === "not_open" || channelInfo.status === "closing") {
+        const reason: Reason =
+          channelInfo.status === "closing"
+            ? "channel_closing"
+            : channelInfo.status === "not_found"
+              ? "channel_not_found"
+              : "channel_not_open";
+        for (const entry of batch) {
+          resolveFailure(entry, reason, `channel ${channel} is ${channelInfo.status}`);
+        }
+        return;
+      }
+
+      const depositRaw = channelInfo.depositRaw;
       const previousAmountRaw = previous?.cumulativeAmountRaw ?? 0n;
 
-      const classified = batch.map((entry) => classify(entry, previous, deps.pricePerMibRaw, deps.maxDeltaPerRequestRaw));
+      const classified = batch.map((entry) =>
+        classify(entry, previous, deps.pricePerMibRaw, deps.maxDeltaPerRequestRaw, depositRaw),
+      );
       const candidates: Array<{ entry: PendingEntry; amount: bigint }> = [];
 
       for (const c of classified) {
@@ -283,6 +342,8 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
           resolveEqual(c.entry, previous!, depositRaw);
         } else if (c.kind === "stale") {
           resolveStale(c.entry, previous!, depositRaw);
+        } else if (c.kind === "exhausted") {
+          resolveExhausted(c.entry, previousAmountRaw, depositRaw);
         } else if (c.kind === "rejected") {
           resolveRejected(c.entry, c.detail, previousAmountRaw, depositRaw);
         } else {
