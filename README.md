@@ -67,6 +67,8 @@ processes end-to-end against a real testnet `.env`.
 
 ## Next step
 
-Escalón 1 is code-complete and ready for human verification: a human needs to
-close **T8.2** (§5, WU8; steps in `docs/sdd/payments-mpp.md` §6, Lote B/D) on
-real testnet accounts before any escalón 2 (`WU6`/`WU7`) work starts.
+**T8.2 is closed** (2026-09-15): two real, sponsored testnet charges settled
+end-to-end (fee payer = recipient, agent XLM balance unchanged). Evidence,
+both transaction hashes, and balances before/after are in
+`docs/sdd/payments-mpp.md` §6, "T8.2 — evidencia testnet". Escalón 2
+(`WU6`/`WU7`) work can now start.

@@ -1498,13 +1498,14 @@ Commit: `docs: record testnet verification evidence for stage 1 and stage 2` · 
   - Pruebas: salida de `curl -i` con 402; salida de `npm run preflight` con trustline en ambas cuentas
   - Depende de: T3.2, T3.4, T0.6
   - Líneas estimadas: 0
-- [ ] **T8.2** — §14.3: un cobro suelto (compuerta de escalón 1)
+- [x] **T8.2** — §14.3: un cobro suelto (compuerta de escalón 1)
   - Ejecutor: humano
   - Archivos: docs/payments-sdd.md (evidencia)
   - Cumple: S1-R7 (cierre de escalón 1), §14.3 — **compuerta dura para WU6/WU7**
   - Pruebas: hash de transacción visible en el explorador; `charge.settled` en stdout; balance XLM del agent sin cambios
   - Depende de: T8.1
   - Líneas estimadas: 0
+  - **Cerrado 2026-09-15**: evidencia completa (dos cobros reales en testnet, balances verificados en Horizon) en `## 6. Implementación` → `### T8.2 — evidencia testnet (2026-09-15)`.
 - [ ] **T8.3** — §14.4: cobros repetidos contra consumo simulado
   - Ejecutor: humano
   - Archivos: docs/payments-sdd.md (evidencia)
@@ -1819,3 +1820,72 @@ Ejecutado en modo estándar (sin TDD estricto), sin acceso a testnet real. Cierr
 
 - La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre **T8.2** (sin cambios respecto a los lotes anteriores) — ver los pasos actualizados más arriba en esta sección (con la nota de `?cumulativeBytes=` agregada en el Lote D).
 - WU6 sigue pendiente de reemplazar `createFakeSigner()`/`createStaticDepositPort()` por las implementaciones reales (sin cambios respecto al Lote C).
+
+### T8.2 — evidencia testnet (2026-09-15)
+
+Ejecutado por un agente con acceso a un `.env` real de testnet (cuentas fondeadas por un humano vía friendbot XLM y el faucet de Circle para USDC). Cierra la compuerta dura de escalón: **dos** cobros reales, sponsored (fee payer = recipient, S1-R3 verificado), quedaron confirmados en el explorador.
+
+**Cuentas usadas** (ambas ya tenían la trustline de USDC contra `USDC_SAC_CONTRACT` por defecto):
+
+- Recipient / fee payer (`STELLAR_RECIPIENT`, `FEE_PAYER_SECRET`): `GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO`
+- Agent / funder / signer (`SIGNER_SECRET`): `GAKAN325AJLQBWR2DPT4ETPHNFVQV4LKM2L4YF63QCVHKREHTPEGXXN3`
+
+**Correcciones previas necesarias (Part 1, commit `5c2ddb4`, antes de poder correr nada de esto):**
+
+1. `scripts/preflight.ts`: el guard `import.meta.url === \`file://${process.argv[1]}\`` nunca matchea en Windows (`import.meta.url` trae el prefijo `file:///D:/...`); se reemplazó por `pathToFileURL(process.argv[1]).href`, el mismo patrón de `src/agent/main.ts`. Además el script no cargaba `dotenv/config` — sin eso, `npm run preflight` nunca leía el `.env` real y el paso 4 del runbook (§6, más arriba) era imposible de completar. Se agregó el import, igual que en `server/main.ts`/`agent/main.ts`.
+2. `src/config/env.ts`: dotenv parsea una línea `KEY=` vacía como `""`, no `undefined`, y `z.optional()` solo acepta `undefined` — así que dejar `CHANNEL_CONTRACT=`/`COMMITMENT_PUBKEY=`/`FUNDER_ACCOUNT=`/`COMMITMENT_SECRET=`/`BACKEND_EVENTS_URL=` vacíos (el formato que `.env.example` documenta para las variables de escalón 2) hacía fallar `parseServerEnv`/`parseAgentEnv` con "invalid or missing environment variable(s)". Se agregó un helper `emptyToUndefined()` (`z.preprocess`) aplicado a los cinco campos opcionales. `.env.example` se dejó sin tocar — el fix está en el parseo, no en el formato del archivo.
+3. `.gitignore` gana `.playwright-mcp/`.
+
+Con esas dos correcciones, `npm run preflight` contra el `.env` real imprime `{"level":"info","msg":"preflight: USDC trustline present on all checked accounts"}` (antes: no imprimía nada en absoluto en Windows).
+
+**Comandos ejecutados:**
+
+```
+npm run check                    # tsc --noEmit, limpio
+npm test                         # 202/202 (200 previos + 2 nuevos de env.test.ts)
+npm run preflight                # trustline OK en ambas cuentas
+npm run server > data/server.log 2>&1 &
+curl -s http://localhost:8080/ready       # {"status":"ready","stage":1,...}
+npm run agent > data/agent-run-1.log 2>&1
+curl -s https://horizon-testnet.stellar.org/transactions/<txHash1>
+npm run agent > data/agent-run-2.log 2>&1   # misma sesión, mismo cumulativeBytes por defecto
+curl -s https://horizon-testnet.stellar.org/accounts/<G...>   # balances antes/después, ambas cuentas
+```
+
+Para la tercera lectura (cumulativeBytes más alto) se descubrió que `npm run agent` (`src/agent/main.ts::runOneShot`) construye la URL con `new URL("/paid-resource", PAYMENT_SERVER_URL)` **sin** query string — no existe ningún mecanismo (env var ni flag de CLI) para pasarle `?cumulativeBytes=` desde la CLI; ese parámetro solo lo lee la ruta del servidor (`src/server/routes/charge.ts`). Se usó un script temporal fuera del repo (borrado inmediatamente después de usarlo, nunca commiteado) que importa sin modificar `createMppChargeClient`/`runOneShotPurchase` de `src/agent/charge-client.ts` y arma la URL con `?cumulativeBytes=2097152` — mismo código de producción, mismo firmado real, solo con la URL explícita que la CLI no expone.
+
+**Resultado — cobro 1 (cumulativeBytes por defecto, 1 MiB = 1048576):**
+
+- `txHash`: `57c29984c496263d9a057d33f8da3e350e8ec7a6ef704a8cb5b2dfd630e89263`
+- `explorerUrl`: https://stellar.expert/explorer/testnet/tx/57c29984c496263d9a057d33f8da3e350e8ec7a6ef704a8cb5b2dfd630e89263
+- Horizon: `successful: true`, `fee_charged: 22959` (stroops), `source_account: GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO` (el recipient/fee payer, nunca el agent — S1-R3)
+- stdout del server: `charge.settled` con `amountRaw: "10000"` y el mismo `txHash`/`explorerUrl`
+
+**Resultado — cobro 2 (cumulativeBytes = 2097152, delta de otro 1 MiB):**
+
+- `txHash`: `2b75ec8dd87011de3b2104029ea1e4c5819845780a3aedbe4414398609f5b9d0`
+- `explorerUrl`: https://stellar.expert/explorer/testnet/tx/2b75ec8dd87011de3b2104029ea1e4c5819845780a3aedbe4414398609f5b9d0
+- Horizon: `successful: true`, `fee_charged: 22959`, `source_account: GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO`
+- stdout del server: segundo `charge.settled`, `amountRaw: "10000"` (delta 2097152 − 1048576 = 1048576 bytes = 1 MiB, mismo precio)
+
+**Balances (Horizon, unidades nativas):**
+
+| Momento | Agent USDC | Agent XLM | Recipient USDC | Recipient XLM |
+|---|---|---|---|---|
+| Antes del faucet de Circle | 0.0000000 | 9999.9999900 | 0.0000000 | 9999.9999900 |
+| Fondeado, antes de cobrar | 20.0000000 | 9999.9999900 | 0.0000000 | 9999.9999900 |
+| Después del cobro 1 | 19.9990000 | 9999.9999900 | 0.0010000 | 9999.9976941 |
+| Después del cobro 2 | 19.9980000 | 9999.9999900 | 0.0020000 | 9999.9953982 |
+
+El balance XLM del agent **no cambió en ningún momento** (S1-R3: nunca paga fee). La caída de XLM del recipient entre cobros es exactamente `fee_charged` (22959 stroops = 0.0022959 XLM) cada vez. El USDC se mueve raw-a-raw: −0.0010000 en el agent por cada +0.0010000 en el recipient, igual a `amountRaw: "10000"` (10000 raw units = 0.0010000 USDC con 7 decimales).
+
+**Segunda lectura con el mismo cumulativeBytes (repetido, T8.3 parcial) — hallazgo inesperado:**
+
+`npm run agent` corrido una segunda vez inmediatamente después del cobro 1 (mismo proceso de servidor, mismo `cumulativeBytes` por defecto = 1048576) **no** hizo ningún intento de cobro on-chain — confirmado: ni balances ni stdout del server cambiaron, y el servidor respondió el envelope M2 `stale_reading` (`status: 200`, `retryable: false`) como diseña `src/server/routes/charge.ts` (FT-R6). La lógica de negocio es correcta y segura (nunca hay doble cobro). Pero la salida de la CLI **no** es el mensaje limpio de "nothing new to bill" que se esperaba: `src/agent/charge-client.ts::createMppChargeClient().purchase()` da por sentado que toda respuesta `200` trae un campo `payment`, y como el envelope `stale_reading` no lo trae, tira `Error("stage 1 purchase response is missing payment.txHash/explorerUrl/network")`, que `agent/main.ts` loguea como `{"level":"error","msg":"stage 1 purchase failed",...}` con `process.exitCode = 1`. No es un error del SDK (`mppx.fetch()` resolvió normal) ni una falla de negocio — es un gap de manejo de respuesta en el cliente propio, que no distingue un `Message2Unsigned` (`status:"unsigned"`) de un cobro realmente asentado antes de leer `payment.txHash`. Queda anotado como punto abierto para WU9/T9.2, no corregido en este lote (T8.2 es evidencia, no código).
+
+**Limpieza:** servidor detenido (`taskkill`), `netstat` confirma el puerto 8080 sin `LISTENING`; el script temporal usado para el cobro 2 se borró del árbol del repo antes de este commit; `data/server.log` y `data/agent-run-*.log` quedan en `data/` (gitignored, no se commitean).
+
+**Puntos abiertos (nuevos, agregados por este lote):**
+
+- `agent/main.ts`/`agent/charge-client.ts` no distingue un `Message2Unsigned` 200 de un cobro asentado — la CLI de un solo cobro termina en `exitCode 1` con un mensaje genérico en vez de reportar `reason`/`detail` del envelope real ante `stale_reading` (o cualquier otro M2 unsigned que un día devuelva `GET /paid-resource`).
+- `npm run agent` no tiene forma de pasar `?cumulativeBytes=`/`?sessionId=` — solo la ruta del servidor los acepta. Si T8.3 (§14.4, cobros repetidos) se cierra formalmente con esta CLI, va a necesitar el mismo rodeo que usó este lote (script ad hoc) o una extensión real de `agent/main.ts`.
