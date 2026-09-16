@@ -127,7 +127,31 @@ const serverSchema = sharedSchema.extend({
   CLOSE_ASSERT_INTERVAL_MS: z.coerce.number().int().min(1).default(2500),
   INIT_RETRY_INTERVAL_MS: z.coerce.number().int().min(1).default(10000),
   RPC_HEALTH_TIMEOUT_MS: z.coerce.number().int().min(1).default(2000),
-});
+})
+  // Stage-2 gate (WU6/WU7 deviation, documented in docs/sdd/payments-mpp.md
+  // §6, Lote E): the design left "stage 2 only" as a comment on individual
+  // fields without a single, enforced rule. Presence of `CHANNEL_CONTRACT`
+  // is the one stage-2 switch (matches the existing per-field "sí en
+  // escalón 2" comments below) — once it is set, the two variables the
+  // channel route/close flow cannot function without must be set too, in
+  // the SAME single validation point (CF-R1), not re-checked ad hoc later.
+  .superRefine((value, ctx) => {
+    if (value.CHANNEL_CONTRACT === undefined) return;
+    if (value.COMMITMENT_PUBKEY === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["COMMITMENT_PUBKEY"],
+        message: "COMMITMENT_PUBKEY is required once CHANNEL_CONTRACT is set (stage 2)",
+      });
+    }
+    if (value.FUNDER_ACCOUNT === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["FUNDER_ACCOUNT"],
+        message: "FUNDER_ACCOUNT is required once CHANNEL_CONTRACT is set (stage 2)",
+      });
+    }
+  });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
 
@@ -147,7 +171,19 @@ const agentSchema = sharedSchema.extend({
   // holds the per-channel mutex (review finding, Lote D): neither call may
   // hang the lock indefinitely. See `agent/routes/vouchers.ts`.
   PORT_CALL_TIMEOUT_MS: z.coerce.number().int().min(1).default(10000),
-});
+})
+  // Same stage-2 gate as serverSchema above, mirrored for the agent's own
+  // stage-2-only variable.
+  .superRefine((value, ctx) => {
+    if (value.CHANNEL_CONTRACT === undefined) return;
+    if (value.COMMITMENT_SECRET === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["COMMITMENT_SECRET"],
+        message: "COMMITMENT_SECRET is required once CHANNEL_CONTRACT is set (stage 2)",
+      });
+    }
+  });
 
 export type AgentEnv = z.infer<typeof agentSchema>;
 

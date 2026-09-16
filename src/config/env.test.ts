@@ -40,9 +40,22 @@ test("parseServerEnv rejects a malformed CHANNEL_CONTRACT when present", () => {
   assert.match(result.detail, /CHANNEL_CONTRACT/);
 });
 
-test("parseServerEnv accepts a well-formed CHANNEL_CONTRACT when present (stage 2)", () => {
-  const result = parseServerEnv({ ...validServerEnv, CHANNEL_CONTRACT: "C".padEnd(56, "A") });
+test("parseServerEnv accepts a well-formed CHANNEL_CONTRACT with its stage-2 companions", () => {
+  const result = parseServerEnv({
+    ...validServerEnv,
+    CHANNEL_CONTRACT: "C".padEnd(56, "A"),
+    COMMITMENT_PUBKEY: "a".repeat(64),
+    FUNDER_ACCOUNT: "G".padEnd(56, "B"),
+  });
   assert.equal(result.ok, true);
+});
+
+test("parseServerEnv rejects CHANNEL_CONTRACT without COMMITMENT_PUBKEY/FUNDER_ACCOUNT (WU6 stage-2 gate)", () => {
+  const result = parseServerEnv({ ...validServerEnv, CHANNEL_CONTRACT: "C".padEnd(56, "A") });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.detail, /COMMITMENT_PUBKEY/);
+  assert.match(result.detail, /FUNDER_ACCOUNT/);
 });
 
 test("parseServerEnv rejects a malformed COMMITMENT_PUBKEY when present", () => {
@@ -96,6 +109,22 @@ test("parseAgentEnv rejects a malformed COMMITMENT_SECRET when present", () => {
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.match(result.detail, /COMMITMENT_SECRET/);
+});
+
+test("parseAgentEnv rejects CHANNEL_CONTRACT without COMMITMENT_SECRET (WU6 stage-2 gate)", () => {
+  const result = parseAgentEnv({ ...validAgentEnv, CHANNEL_CONTRACT: "C".padEnd(56, "A") });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.detail, /COMMITMENT_SECRET/);
+});
+
+test("parseAgentEnv accepts CHANNEL_CONTRACT with COMMITMENT_SECRET", () => {
+  const result = parseAgentEnv({
+    ...validAgentEnv,
+    CHANNEL_CONTRACT: "C".padEnd(56, "A"),
+    COMMITMENT_SECRET: "b".repeat(64),
+  });
+  assert.equal(result.ok, true);
 });
 
 test("both roles reject a non-positive PRICE_PER_MIB_RAW", () => {
