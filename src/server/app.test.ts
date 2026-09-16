@@ -153,6 +153,107 @@ test("GET /paid-resource with a credential settles and returns payment.txHash/ex
   });
 });
 
+test("GET /paid-resource?cumulativeBytes=abc is a plain 400, never an uncaught BigInt SyntaxError (review finding 2)", async () => {
+  const boot = fakeBoot({
+    status: "ready",
+    instance: fakeChargePort(async (): Promise<ChargeOutcome> => {
+      throw new Error("must not be called");
+    }),
+  });
+  await withApp(boot, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/paid-resource?cumulativeBytes=abc`, {
+      headers: { authorization: "fake-credential" },
+    });
+    assert.equal(response.status, 400);
+    assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /non-negative integer/);
+  });
+});
+
+test("GET /paid-resource with a lower cumulativeBytes than previously billed is 200 M2 stale_reading, never a RangeError (review finding 2)", async () => {
+  const boot = fakeBoot({
+    status: "ready",
+    instance: fakeChargePort(
+      async (): Promise<ChargeOutcome> => ({
+        kind: "settled",
+        txHash: "c".repeat(64),
+        buildResponse: (body) =>
+          new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }),
+      }),
+    ),
+  });
+  await withApp(boot, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/paid-resource?sessionId=s1&cumulativeBytes=2097152`, {
+      headers: { authorization: "fake-credential" },
+    });
+    assert.equal(first.status, 200);
+
+    const second = await fetch(`${baseUrl}/paid-resource?sessionId=s1&cumulativeBytes=1048576`, {
+      headers: { authorization: "fake-credential" },
+    });
+    assert.equal(second.status, 200);
+    const body = message2UnsignedSchema.parse(await second.json());
+    assert.equal(body.reason, "stale_reading");
+    assert.equal(body.retryable, false);
+  });
+});
+
+test("a second identical GET /paid-resource (amountRaw would be 0) is 200 M2 stale_reading, no charge attempt (review finding 3)", async () => {
+  let chargeCalls = 0;
+  const boot = fakeBoot({
+    status: "ready",
+    instance: fakeChargePort(
+      async (): Promise<ChargeOutcome> => {
+        chargeCalls += 1;
+        return {
+          kind: "settled",
+          txHash: "d".repeat(64),
+          buildResponse: (body) =>
+            new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }),
+        };
+      },
+    ),
+  });
+  await withApp(boot, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/paid-resource?sessionId=s2&cumulativeBytes=1048576`, {
+      headers: { authorization: "fake-credential" },
+    });
+    assert.equal(first.status, 200);
+    assert.equal(chargeCalls, 1);
+
+    const second = await fetch(`${baseUrl}/paid-resource?sessionId=s2&cumulativeBytes=1048576`, {
+      headers: { authorization: "fake-credential" },
+    });
+    assert.equal(second.status, 200);
+    assert.equal(chargeCalls, 1, "the charge port must not be called again for a non-advancing reading");
+    const body = message2UnsignedSchema.parse(await second.json());
+    assert.equal(body.reason, "stale_reading");
+    assert.equal(body.retryable, false);
+  });
+});
+
+test("an uncaught error from a route never leaks an HTML stack trace (review finding 2)", async () => {
+  const boot = fakeBoot({
+    status: "ready",
+    instance: fakeChargePort(async (): Promise<ChargeOutcome> => {
+      throw new Error("boom: /d/sTelar/stellar_jujuy_dev/src/server/charge-service.ts");
+    }),
+  });
+  await withApp(boot, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/paid-resource`, {
+      headers: { authorization: "fake-credential" },
+    });
+    assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+    const text = await response.text();
+    assert.doesNotMatch(text, /<html/i);
+    assert.doesNotMatch(text, /at .*\.ts:\d+/);
+    const body = message2UnsignedSchema.parse(JSON.parse(text));
+    assert.equal(body.reason, "internal_error");
+    assert.equal(body.retryable, true);
+  });
+});
+
 test("GET /paid-resource with a failing charge returns an M2 unsigned envelope (S1-R6)", async () => {
   const boot = fakeBoot({
     status: "ready",

@@ -4,6 +4,24 @@
 
 const BYTES_PER_MIB = 1048576n;
 
+const NON_NEGATIVE_INTEGER_RE = /^(0|[1-9]\d*)$/;
+
+/**
+ * Parses a query-string-style value as a non-negative integer `bigint` — no
+ * sign, no decimals, no leading zeros (same digit-string rule as
+ * `shared/messages.ts::rawAmountSchema` and `config/env.ts`'s
+ * `rawPositiveIntegerRaw`, applied here to byte counts, which may legitimately
+ * be `0`). Returns `undefined` for anything else instead of throwing — a raw
+ * `BigInt(userInput)` call throws a `SyntaxError` on malformed input, which is
+ * exactly how an unvalidated `?cumulativeBytes=abc` used to turn into an
+ * uncaught 500 (review finding, Lote D). Callers decide how to turn
+ * `undefined` into a 400.
+ */
+export function parseNonNegativeIntegerRaw(value: string): bigint | undefined {
+  if (!NON_NEGATIVE_INTEGER_RE.test(value)) return undefined;
+  return BigInt(value);
+}
+
 /**
  * Ceiling division in BigInt: the smallest integer `q` such that
  * `q * denominator >= numerator`.

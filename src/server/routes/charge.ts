@@ -6,8 +6,9 @@
 // spinning up Express at all.
 
 import type { Request as ExpressRequest, RequestHandler, Response as ExpressResponse } from "express";
-import { computeChargeDeltaRaw } from "../../shared/money.ts";
+import { computeChargeDeltaRaw, parseNonNegativeIntegerRaw } from "../../shared/money.ts";
 import type { EmitInput } from "../../shared/events.ts";
+import { buildUnsigned } from "../../shared/messages.ts";
 import { createChargeService, type ChargePort } from "../charge-service.ts";
 
 export type ChargeRouteDeps = {
@@ -97,11 +98,44 @@ export function createChargeRoute(
     const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId : null;
     const storeKey = sessionId ?? DEFAULT_SESSION_KEY;
     const cumulativeBytesParam = req.query.cumulativeBytes;
-    const cumulativeBytesNow =
-      typeof cumulativeBytesParam === "string"
-        ? BigInt(cumulativeBytesParam)
-        : DEFAULT_CUMULATIVE_BYTES;
+    let cumulativeBytesNow: bigint;
+    if (typeof cumulativeBytesParam === "string") {
+      // Review finding, Lote D (MAJOR): `BigInt(cumulativeBytesParam)` used
+      // to throw a raw `SyntaxError` on malformed input (e.g. `?cumulative
+      // Bytes=abc`), which — with no error handler on this app (see
+      // `server/app.ts`) — surfaced as Express's default HTML 500 page,
+      // leaking absolute file paths in the stack trace. `?cumulativeBytes=`
+      // must be a non-negative integer string; anything else is a plain 400.
+      const parsed = parseNonNegativeIntegerRaw(cumulativeBytesParam);
+      if (parsed === undefined) {
+        res.status(400).json({ error: "cumulativeBytes must be a non-negative integer" });
+        return;
+      }
+      cumulativeBytesNow = parsed;
+    } else {
+      cumulativeBytesNow = DEFAULT_CUMULATIVE_BYTES;
+    }
     const cumulativeBytesPrevious = cumulativeBytesStore.get(storeKey) ?? 0n;
+
+    if (cumulativeBytesNow <= cumulativeBytesPrevious) {
+      // Review findings, Lote D (MAJOR x2): a lower reading used to reach
+      // `computeChargeDeltaRaw`, which throws a `RangeError` for a
+      // regression — another uncaught-exception 500. An *equal* reading
+      // (e.g. the same `?cumulativeBytes=` requested twice in a row, the
+      // exact repeated-`GET /paid-resource` scenario from the testnet
+      // runbook) computes `amountRaw = 0n`, which the SDK client rejects
+      // with `Invalid amount: "0"` — also an uncaught throw. Both are the
+      // same business outcome: nothing new to bill (FT-R6), never a charge
+      // attempt and never a 402 challenge.
+      const { body, status } = buildUnsigned("stale_reading", {
+        sessionId,
+        remaining: "0",
+        meterReadingId: null,
+        detail: `cumulativeBytes ${cumulativeBytesNow} is not greater than the last billed value ${cumulativeBytesPrevious}`,
+      });
+      res.status(status).json(body);
+      return;
+    }
     const amountRaw = computeChargeDeltaRaw(
       cumulativeBytesNow,
       cumulativeBytesPrevious,

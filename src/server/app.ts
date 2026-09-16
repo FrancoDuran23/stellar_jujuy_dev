@@ -3,9 +3,10 @@
 // itself is never touched here — only through `FailClosedBoot<ChargePort>`,
 // built in `config/boot.ts`.
 
-import express, { type Express } from "express";
+import express, { type ErrorRequestHandler, type Express } from "express";
 import type { FailClosedBoot } from "../config/boot.ts";
 import type { EmitInput } from "../shared/events.ts";
+import { buildUnsigned } from "../shared/messages.ts";
 import { createChargeService, type ChargePort } from "./charge-service.ts";
 import { createChargeRoute, type CumulativeBytesStore } from "./routes/charge.ts";
 import { createHealthRoute, createReadyRoute } from "./routes/health.ts";
@@ -42,6 +43,30 @@ function createLiveChargePort(boot: Pick<FailClosedBoot<ChargePort>, "getState">
   };
 }
 
+/**
+ * Catch-all error handler (review finding, Lote D, MAJOR): without this,
+ * Express 5 forwards any uncaught throw or rejected promise from a route
+ * handler (`createChargeRoute`'s async function included) to its own default
+ * error page — HTML, with a stack trace containing absolute file paths. This
+ * mirrors `agent/app.ts`'s `jsonParseErrorHandler` (same "never leak a stack,
+ * always answer JSON" rule) but answers with a real M2 unsigned envelope,
+ * matching `shared/reasons.ts`'s documented design: "Any untyped exception is
+ * mapped to `internal_error` by the error-handling middleware — a stack
+ * trace never reaches the gateway."
+ */
+const jsonErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  const { body, status } = buildUnsigned("internal_error", {
+    sessionId: null,
+    meterReadingId: null,
+    detail: err instanceof Error ? err.message : String(err),
+  });
+  res.status(status).json(body);
+};
+
 export function createServerApp(options: CreateServerAppOptions): Express {
   const app = express();
   app.disable("x-powered-by");
@@ -62,6 +87,11 @@ export function createServerApp(options: CreateServerAppOptions): Express {
   );
 
   app.get("/paid-resource", requireReady(options.boot), chargeRoute);
+
+  // Last line of defense (review finding, Lote D): must be mounted after
+  // every route so Express's error-handling dispatch (it recognizes an
+  // error middleware by its 4-argument arity) picks it up for all of them.
+  app.use(jsonErrorHandler);
 
   return app;
 }

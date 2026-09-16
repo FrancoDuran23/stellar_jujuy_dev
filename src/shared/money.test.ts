@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ceilDiv, computeChargeDeltaRaw, computeExpectedAmountRaw } from "./money.ts";
+import { ceilDiv, computeChargeDeltaRaw, computeExpectedAmountRaw, parseNonNegativeIntegerRaw } from "./money.ts";
 
 const PRICE_PER_MIB_RAW = 10_000n;
 const MIB = 1048576n;
@@ -75,4 +75,18 @@ test("computeChargeDeltaRaw rejects a decreasing cumulative reading", () => {
 
 test("computeExpectedAmountRaw rejects a non-positive price", () => {
   assert.throws(() => computeExpectedAmountRaw(100n, 0n), RangeError);
+});
+
+// --- parseNonNegativeIntegerRaw (review finding, Lote D: ?cumulativeBytes=
+// must never reach a raw BigInt() call) ---
+
+test("parseNonNegativeIntegerRaw accepts 0 and plain digit strings", () => {
+  assert.equal(parseNonNegativeIntegerRaw("0"), 0n);
+  assert.equal(parseNonNegativeIntegerRaw("1048576"), 1048576n);
+});
+
+test("parseNonNegativeIntegerRaw rejects non-digit input, leading zeros, decimals, and signs", () => {
+  for (const value of ["abc", "007", "1.5", "-1", "", " 1", "1 ", "0x1"]) {
+    assert.equal(parseNonNegativeIntegerRaw(value), undefined, `expected undefined for ${JSON.stringify(value)}`);
+  }
 });
