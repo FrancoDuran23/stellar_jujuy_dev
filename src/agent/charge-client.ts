@@ -13,6 +13,8 @@
 
 import { Keypair } from "@stellar/stellar-sdk";
 import { Mppx, stellar } from "@stellar/mpp/charge/client";
+import { message2UnsignedSchema } from "../shared/messages.ts";
+import type { Reason } from "../shared/reasons.ts";
 
 export type ChargeReceipt = {
   txHash: string;
@@ -27,6 +29,27 @@ type ServerChargeResponseBody = {
 };
 
 /**
+ * `purchase()`'s result (T8.2 open finding #1): a `GET /paid-resource` `200`
+ * does not always carry a settled payment — the server also answers `200`
+ * (or `503`) with a plain M2 unsigned envelope (`shared/messages.ts`) for a
+ * clean business outcome such as `stale_reading` (FT-R6) or a retryable
+ * `signer_unavailable`/`upstream_unavailable`. Both are typed outcomes here,
+ * never a thrown error — only a malformed body or a technical/network
+ * failure throws (see `createMppChargeClient`).
+ */
+export type PurchaseOutcome =
+  | { kind: "settled"; receipt: ChargeReceipt }
+  | {
+      kind: "unsigned";
+      reason: Reason;
+      retryable: boolean;
+      detail: string;
+      /** From the `Retry-After` response header, when present (FT-R2 ties it
+       * to a `503`); `null` otherwise. */
+      retryAfterSeconds: number | null;
+    };
+
+/**
  * The only boundary between the CLI (`agent/main.ts`) and the SDK. A fake in
  * tests never touches the network, and — since the agent only ever signs
  * Soroban authorization entries in sponsored mode (S1-R2) and never builds
@@ -34,9 +57,61 @@ type ServerChargeResponseBody = {
  * either (S1-R3): there is nothing balance-related for a fake to simulate.
  */
 export type ChargeClientPort = {
-  /** Performs exactly one paid GET request against `url` and returns the settlement receipt. */
-  purchase(url: string): Promise<ChargeReceipt>;
+  /** Performs exactly one paid GET request against `url` and returns either
+   * the settlement receipt or a typed M2 unsigned outcome. Throws only for a
+   * malformed response body or a technical/network failure. */
+  purchase(url: string): Promise<PurchaseOutcome>;
 };
+
+function parseRetryAfterSeconds(header: string | null): number | null {
+  if (header === null) return null;
+  const value = Number(header);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Pure response-parsing core of `purchase()`, split out so the T8.2 open
+ * finding (a `200`/`503` that carries an M2 unsigned envelope instead of a
+ * settled payment) is unit-testable without constructing the real SDK client
+ * or a network `Response` (design 4.1's testability rule — only
+ * `createMppChargeClient` itself touches `mppx`). Throws only for a
+ * malformed body or an HTTP failure with no usable M2 envelope.
+ */
+export function parsePurchaseResult(
+  status: number,
+  retryAfterHeader: string | null,
+  body: unknown,
+): PurchaseOutcome {
+  // Checked before the HTTP status: a `503` unsigned envelope (retryable
+  // `signer_unavailable`/`upstream_unavailable`/`internal_error`) is a clean
+  // business outcome, not a technical failure — it must not throw.
+  const unsigned = message2UnsignedSchema.safeParse(body);
+  if (unsigned.success) {
+    return {
+      kind: "unsigned",
+      reason: unsigned.data.reason,
+      retryable: unsigned.data.retryable,
+      detail: unsigned.data.detail,
+      retryAfterSeconds: parseRetryAfterSeconds(retryAfterHeader),
+    };
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`stage 1 purchase failed: HTTP ${status} — ${JSON.stringify(body)}`);
+  }
+
+  const parsedBody = body as ServerChargeResponseBody;
+  const txHash = parsedBody.payment?.txHash;
+  const explorerUrl = parsedBody.payment?.explorerUrl;
+  const network = parsedBody.payment?.network;
+  if (typeof txHash !== "string" || typeof explorerUrl !== "string" || typeof network !== "string") {
+    throw new Error("stage 1 purchase response is missing payment.txHash/explorerUrl/network");
+  }
+  return {
+    kind: "settled",
+    receipt: { txHash, explorerUrl, network, payload: parsedBody.payload },
+  };
+}
 
 /**
  * Builds the real, SDK-backed `ChargeClientPort`. `signerSecret` (S..., 56
@@ -53,18 +128,17 @@ export function createMppChargeClient(signerSecret: string): ChargeClientPort {
   return {
     async purchase(url) {
       const response = await mppx.fetch(url);
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(`stage 1 purchase failed: HTTP ${response.status} — ${detail}`);
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new Error(
+          `stage 1 purchase response is not valid JSON (HTTP ${response.status})`,
+        );
       }
-      const body = (await response.json()) as ServerChargeResponseBody;
-      const txHash = body.payment?.txHash;
-      const explorerUrl = body.payment?.explorerUrl;
-      const network = body.payment?.network;
-      if (typeof txHash !== "string" || typeof explorerUrl !== "string" || typeof network !== "string") {
-        throw new Error("stage 1 purchase response is missing payment.txHash/explorerUrl/network");
-      }
-      return { txHash, explorerUrl, network, payload: body.payload };
+
+      return parsePurchaseResult(response.status, response.headers.get("retry-after"), body);
     },
   };
 }
@@ -78,6 +152,6 @@ export function createMppChargeClient(signerSecret: string): ChargeClientPort {
 export async function runOneShotPurchase(
   port: ChargeClientPort,
   url: string,
-): Promise<ChargeReceipt> {
+): Promise<PurchaseOutcome> {
   return port.purchase(url);
 }

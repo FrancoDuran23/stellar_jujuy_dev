@@ -22,7 +22,16 @@ processes end-to-end against a real testnet `.env`.
   `GET /health` and `GET /ready` are always reachable; `GET /paid-resource`
   is fail-closed behind `/ready`.
 - `npm run agent` — one-shot CLI: makes exactly one paid request against
-  `PAYMENT_SERVER_URL` and exits (stage 1, S1-R7 evidence).
+  `PAYMENT_SERVER_URL` and exits (stage 1, S1-R7 evidence). Exits `0` on a
+  settled payment and on a non-retryable M2 outcome (e.g. `stale_reading` —
+  "nothing new to bill"); exits `1` on a retryable M2 outcome (e.g. `503
+  signer_unavailable`) or a technical/network failure. Never prints a stack
+  trace.
+  - `--bytes <n>` sets the cumulative bytes value sent as
+    `?cumulativeBytes=`; falls back to the `CUMULATIVE_BYTES` env var, then
+    to `1048576` (1 MiB, matching the server's own bare-call default). Must
+    be a non-negative integer (same rule as the server's `?cumulativeBytes=`
+    below). Example: `npm run agent -- --bytes 2097152`.
 - `npm run agent:serve` — long-running agent process: listens on
   `AGENT_PORT` (default `8081`) and serves `GET /health`, `GET /ready`, and
   `POST /vouchers` (stage 1.5).
