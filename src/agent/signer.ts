@@ -16,6 +16,17 @@ export type SignInput = {
   network: string;
   /** Raw i128 units, as a digit string (never a bigint or number — AC-R5). */
   cumulativeAmount: string;
+  /**
+   * Correlation-only context (WU7) — never part of the signed bytes, never
+   * used for idempotency (design 4.3: that is `cumulativeAmount` alone).
+   * The real, stage-2 signer (`config/boot.ts`'s `createServerDeliveringSigner`)
+   * forwards these to the payment server's `POST /channel/vouchers` so its
+   * own JSONL record carries the same session/meter correlation as the
+   * agent's; `createFakeSigner` ignores them entirely.
+   */
+  sessionId: string;
+  cumulativeBytes: number;
+  meterReadingId: string;
 };
 
 export type SignResult = {
