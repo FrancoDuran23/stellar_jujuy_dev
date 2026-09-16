@@ -23,6 +23,7 @@ import { parseServerEnv, parseAgentEnv, type ServerEnv, type AgentEnv } from "./
 import { isReason, type Reason } from "../shared/reasons.ts";
 import type { EmitInput } from "../shared/events.ts";
 import { VoucherLog } from "../persistence/voucher-log.ts";
+import { channelRecordPath, readChannelRecord } from "../persistence/channel-record.ts";
 import {
   createVoucherService,
   createStaticDepositPort,
@@ -30,6 +31,15 @@ import {
   type ChannelDepositPort,
 } from "../agent/routes/vouchers.ts";
 import { createFakeSigner, type SignerPort } from "../agent/signer.ts";
+import { createChannelCache, type ChannelRpcPort } from "../agent/channel-cache.ts";
+import {
+  assertCommitmentBinds,
+  prepareCommitmentBytes,
+  signCommitmentBytes,
+  tryGetDepositedRaw,
+  type ChannelContractDeps,
+} from "../shared/stellar/channel-contract.ts";
+import { getChannelState } from "@stellar/mpp/channel/server";
 
 const AMOUNT_DECIMALS = 7;
 
@@ -242,6 +252,77 @@ export async function buildServerChargeInstance(
   }
 }
 
+/**
+ * Real, `COMMITMENT_SECRET`-backed `SignerPort` (WU6, T6.2). Simulates
+ * `prepare_commitment(amount)` on the channel (free, read-only — spike Part
+ * A/C), verifies the returned XDR map binds to the expected
+ * channel/amount/network (the same defense `@stellar/mpp`'s client applies
+ * before ever signing), then ed25519-signs with the raw 32-byte seed. The
+ * SDK itself is only touched here and in `agent/charge-client.ts`
+ * (design 4.1's testability rule) via the thin `shared/stellar/
+ * channel-contract.ts` driver — this function has no business logic of its
+ * own.
+ */
+export function createRealChannelSigner(
+  commitmentSecretHex: string,
+  channelDeps: ChannelContractDeps,
+): SignerPort {
+  return {
+    async sign(input) {
+      const amount = BigInt(input.cumulativeAmount);
+      const bytes = await prepareCommitmentBytes(channelDeps, input.channel, amount);
+      assertCommitmentBinds(bytes, { channel: input.channel, amount, network: channelDeps.network });
+      return signCommitmentBytes(commitmentSecretHex, bytes);
+    },
+  };
+}
+
+/**
+ * Real, contract-backed `ChannelRpcPort` (WU6, T6.3's underlying driver).
+ * Every call is wrapped so a Soroban RPC hiccup never throws past this
+ * function (the spike's XDR crash finding, docs/sdd/payments-mpp.md §6: any
+ * RPC call in a request-serving path must degrade to a typed result, never
+ * crash the process) — a failure here simply reports `{found: false}`,
+ * which `agent/routes/vouchers.ts` turns into `channel_not_found`.
+ *
+ * `deposited()` is missing on the only wasm revision deployable today
+ * (spike Part C) — falls back to the locally tracked `data/channel-
+ * {network}.json` record (written by `agent/channel.ts`'s `open`/`top-up`
+ * subcommands), and as a last resort to the on-chain `balance` (a safe
+ * lower bound: it under-reports remaining budget rather than over-reporting
+ * it). `closing` comes from `@stellar/mpp/channel/server`'s `getChannelState()`
+ * (`closeEffectiveAtLedger !== null`), which already knows how to read the
+ * contract's `CloseEffectiveAtLedger` instance-storage entry directly (no
+ * getter exists for it — spike Part B).
+ */
+export function createStellarChannelRpcPort(env: {
+  SOROBAN_RPC_URL: string;
+  STELLAR_NETWORK: ChannelContractDeps["network"];
+  DATA_DIR: string;
+}): ChannelRpcPort {
+  const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
+  return {
+    async getContractChannelInfo(channel) {
+      try {
+        const state = await getChannelState({
+          channel,
+          network: env.STELLAR_NETWORK,
+          rpcUrl: env.SOROBAN_RPC_URL,
+        });
+        const closing = state.closeEffectiveAtLedger !== null;
+        let depositRaw = await tryGetDepositedRaw(channelDeps, channel);
+        if (depositRaw === undefined) {
+          const record = readChannelRecord(channelRecordPath(env.DATA_DIR, env.STELLAR_NETWORK));
+          depositRaw = record !== undefined && record.channel === channel ? BigInt(record.depositRaw) : state.balance;
+        }
+        return { found: true, depositRaw, closing };
+      } catch {
+        return { found: false };
+      }
+    },
+  };
+}
+
 const DEFAULT_INIT_RETRY_INTERVAL_MS = 10_000;
 
 /**
@@ -322,10 +403,23 @@ export async function buildAgentVouchersInstance(
     return { status: "unavailable", reason: opened.reason, detail: opened.detail };
   }
 
+  // Stage-2 gate (config/env.ts's superRefine): CHANNEL_CONTRACT set implies
+  // COMMITMENT_SECRET is also set, so this narrowing is safe. Below that
+  // gate, behavior is byte-for-byte the stage-1.5 fake wiring (Lote C/D) —
+  // no deployment loses its existing behavior by upgrading past WU6.
+  const stage2 = env.CHANNEL_CONTRACT !== undefined && env.COMMITMENT_SECRET !== undefined;
+  const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
+  const defaultSigner = stage2
+    ? createRealChannelSigner(env.COMMITMENT_SECRET!, channelDeps)
+    : createFakeSigner();
+  const defaultDepositPort = stage2
+    ? createChannelCache(createStellarChannelRpcPort(env))
+    : createStaticDepositPort();
+
   const service = createVoucherService({
     voucherLog: opened.log,
-    signer: deps.signer ?? createFakeSigner(),
-    depositPort: deps.depositPort ?? createStaticDepositPort(),
+    signer: deps.signer ?? defaultSigner,
+    depositPort: deps.depositPort ?? defaultDepositPort,
     network: env.STELLAR_NETWORK,
     pricePerMibRaw: env.PRICE_PER_MIB_RAW,
     maxDeltaPerRequestRaw: env.MAX_DELTA_PER_REQUEST_RAW,

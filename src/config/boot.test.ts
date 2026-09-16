@@ -254,6 +254,51 @@ test("buildAgentVouchersInstance: a healthy/missing voucher log goes ready and i
   assert.equal(outcome.body.status, "signed");
 });
 
+test("buildAgentVouchersInstance: an explicit signer/depositPort override always wins, even in stage 2", async () => {
+  const dir = makeTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-agent-testnet.jsonl");
+
+  const env = parseAgentEnv({
+    ...validAgentRawEnv,
+    CHANNEL_CONTRACT: "C".padEnd(56, "A"),
+    COMMITMENT_SECRET: "a".repeat(64),
+  });
+  assert.equal(env.ok, true);
+  if (!env.ok) return;
+
+  let signCalls = 0;
+  const result = await buildAgentVouchersInstance(env.value, {
+    voucherLogPath,
+    signer: {
+      async sign() {
+        signCalls += 1;
+        return { signature: "a".repeat(128), commitmentPubkey: "b".repeat(64) };
+      },
+    },
+    depositPort: {
+      async getChannelInfo() {
+        return { status: "open", depositRaw: 1_000_000n };
+      },
+    },
+  });
+  assert.equal(result.status, "ready");
+  if (result.status !== "ready") return;
+
+  const outcome = await result.instance.handle({
+    version: 1,
+    sessionId: "sess_1",
+    channel: `C${"A".repeat(55)}`,
+    network: "stellar:testnet",
+    asset: "USDC",
+    cumulativeBytes: 1_048_576,
+    cumulativeAmount: "10000",
+    meterReadingId: "mr_1",
+    observedAt: "2026-09-20T18:04:02.118Z",
+  });
+  assert.equal(outcome.body.status, "signed");
+  assert.equal(signCalls, 1);
+});
+
 test("createAgentBoot: a corrupt voucher log makes the whole boot unavailable, mapping to internal_error for M2 (FC-R5)", async () => {
   const boot = createAgentBoot({
     rawEnv: validAgentRawEnv,
