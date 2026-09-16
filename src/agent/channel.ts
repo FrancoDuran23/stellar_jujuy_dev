@@ -35,7 +35,7 @@ import {
   type ChannelRecord,
 } from "../persistence/channel-record.ts";
 import { parseNonNegativeIntegerRaw } from "../shared/money.ts";
-import type { Network } from "../shared/stellar/network.ts";
+import { isNetwork, NETWORKS, type Network } from "../shared/stellar/network.ts";
 
 export type ChannelOpenResult = { channel: string; txHash: string; deployLedger: number; feeChargedStroops: string };
 export type ChannelTxResult = { txHash: string; feeChargedStroops: string };
@@ -151,6 +151,20 @@ export async function runChannelCli(
   recordStore: ChannelRecordStore,
   io: CliIO,
 ): Promise<number> {
+  // Review finding 10b, Lote F: this CLI is a demo/testnet tool — every
+  // command it runs (open/top-up/close-start/refund/state) moves real funds
+  // once run against stellar:pubnet. Refuse outright rather than let an
+  // operator's copy-pasted .env silently point a demo script at mainnet.
+  if (env.network === "stellar:pubnet") {
+    io.error(
+      JSON.stringify({
+        level: "error",
+        msg: "refusing to run against stellar:pubnet — this CLI is for stellar:testnet demos only",
+      }),
+    );
+    return 1;
+  }
+
   const parsed = parseArgs(argv);
   if (parsed.command === "error") {
     io.error(JSON.stringify({ level: "error", msg: parsed.detail }));
@@ -208,6 +222,25 @@ export async function runChannelCli(
       recordStore.write({
         ...previous,
         depositRaw: (BigInt(previous.depositRaw) + parsed.amountRaw).toString(),
+        updatedAt: io.now().toISOString(),
+      });
+    } else {
+      // Review finding 10b, Lote F: no local record exists yet for this
+      // channel (e.g. it was opened outside this CLI — the demo channel #2
+      // case) — top_up is authoritative evidence of AT LEAST this deposit,
+      // so seed a fresh record instead of silently discarding it (the
+      // record would otherwise stay entirely absent forever, since only
+      // `open`/`top-up` ever write it). `refundWaitingPeriodLedgers` and
+      // `deployLedger` are unknown here (this CLI never opened the
+      // channel) — recorded as `0`, a documented, harmless placeholder:
+      // nothing in this codebase reads either field back from the record.
+      recordStore.write({
+        v: 1,
+        channel,
+        txHash: result.txHash,
+        depositRaw: parsed.amountRaw.toString(),
+        refundWaitingPeriodLedgers: 0,
+        deployLedger: 0,
         updatedAt: io.now().toISOString(),
       });
     }
@@ -322,7 +355,15 @@ function readCliEnv(): CliEnv {
   const funderSecret = process.env.SIGNER_SECRET;
   const recipientPublicKey = process.env.STELLAR_RECIPIENT;
   const usdcContract = process.env.USDC_SAC_CONTRACT ?? "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
-  const network = (process.env.STELLAR_NETWORK ?? "stellar:testnet") as Network;
+  // Review finding 10b, Lote F: this used to blindly cast STELLAR_NETWORK to
+  // `Network` — a typo (or an unrelated env value) would silently reach
+  // `networkPassphrase()` and fail obscurely deep inside the SDK instead of
+  // here, at the one place this CLI reads it.
+  const rawNetwork = process.env.STELLAR_NETWORK ?? "stellar:testnet";
+  if (!isNetwork(rawNetwork)) {
+    throw new Error(`STELLAR_NETWORK must be one of ${NETWORKS.join(", ")}, got "${rawNetwork}"`);
+  }
+  const network = rawNetwork;
   if (funderSecret === undefined || funderSecret === "") {
     throw new Error("SIGNER_SECRET must be set (the funder's Stellar secret key)");
   }

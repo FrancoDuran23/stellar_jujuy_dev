@@ -192,7 +192,11 @@ function runServe(): void {
   const boot = createAgentBoot({
     buildVouchersInstance: (env) => buildAgentVouchersInstance(env, { emit: emitEvent }),
   });
-  const app = createAgentApp({ boot, gatewayToken });
+  const app = createAgentApp({
+    boot,
+    gatewayToken,
+    channel: parsedAtStartup.ok ? parsedAtStartup.value.CHANNEL_CONTRACT : undefined,
+  });
 
   app.listen(port, () => {
     process.stdout.write(

@@ -43,7 +43,16 @@ function statePort(sequence: ChannelChainInfo[]): ChannelStatePort {
 }
 
 function openInfo(overrides: Partial<Extract<ChannelChainInfo, { found: true }>> = {}): ChannelChainInfo {
-  return { found: true, depositRaw: 1000n, balanceRaw: 1000n, closeEffectiveAtLedger: null, currentLedger: 1, ...overrides };
+  return {
+    found: true,
+    depositRaw: 1000n,
+    balanceRaw: 1000n,
+    closeEffectiveAtLedger: null,
+    currentLedger: 1,
+    to: "G".padEnd(56, "R"),
+    token: `C${"T".repeat(55)}`,
+    ...overrides,
+  };
 }
 
 /** Always succeeds on the first call — the common case for tests that only

@@ -26,16 +26,30 @@ const channelVoucherBodySchema = z.object({
 
 export type CreateChannelRouteDeps = {
   channelService: ChannelService;
+  /** The server's own configured `CHANNEL_CONTRACT` — review finding 2,
+   * Lote F: a request whose `channel` field names a DIFFERENT channel is
+   * rejected outright (400) instead of being silently processed against
+   * whatever `store.getHighest`/`closeChannel` happen to key on, which
+   * would zero the real settlement without either side noticing. */
+  channel: string;
 };
 
 /** `POST /channel/vouchers`: verifies + persists a commitment. Always `200`
  * for a schema-valid, business-level outcome (`{accepted, ...}` or
- * `{accepted:false, reason, detail}`); `400` only for a malformed body. */
+ * `{accepted:false, reason, detail}`); `400` only for a malformed body OR a
+ * `channel` that does not match the configured `CHANNEL_CONTRACT`. */
 export function createChannelVouchersRoute(deps: CreateChannelRouteDeps): RequestHandler {
   return async (req, res) => {
     const parsed = channelVoucherBodySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid channel voucher body", issues: parsed.error.issues });
+      return;
+    }
+    if (parsed.data.channel !== deps.channel) {
+      res.status(400).json({
+        error: "channel does not match the configured CHANNEL_CONTRACT",
+        channel: parsed.data.channel,
+      });
       return;
     }
     const outcome = await deps.channelService.verifyAndAccept({

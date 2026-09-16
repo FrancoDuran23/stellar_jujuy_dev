@@ -32,6 +32,18 @@ async function main(): Promise<number> {
     return 1;
   }
   const env = parsed.value;
+  // Review finding 10b, Lote F: same guard as agent/channel.ts's CLI — this
+  // is an operator demo tool, and `close` moves real funds. Refuse pubnet
+  // outright rather than let a copy-pasted .env run it against mainnet.
+  if (env.STELLAR_NETWORK === "stellar:pubnet") {
+    console.error(
+      bigintSafeStringify({
+        level: "error",
+        msg: "refusing to run against stellar:pubnet — this CLI is for stellar:testnet demos only",
+      }),
+    );
+    return 1;
+  }
   if (env.CHANNEL_CONTRACT === undefined || env.COMMITMENT_PUBKEY === undefined || env.FUNDER_ACCOUNT === undefined) {
     console.error(bigintSafeStringify({ level: "error", msg: "stage 2 is not configured (CHANNEL_CONTRACT/COMMITMENT_PUBKEY/FUNDER_ACCOUNT unset)" }));
     return 1;

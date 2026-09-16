@@ -456,10 +456,11 @@ test("append (fsync included) happens before handle() resolves (VP-R3, review fi
 async function withRouteApp(
   service: VoucherService,
   fn: (baseUrl: string) => Promise<void>,
+  routeDeps: { channel?: string } = {},
 ): Promise<void> {
   const app = express();
   app.use(express.json());
-  app.post("/vouchers", createVouchersRoute({ gatewayToken: GATEWAY_TOKEN, service }));
+  app.post("/vouchers", createVouchersRoute({ gatewayToken: GATEWAY_TOKEN, service, channel: routeDeps.channel }));
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -531,4 +532,50 @@ test("POST /vouchers with a valid token and body signs and returns 200 (end-to-e
     const body = (await response.json()) as { status: string };
     assert.equal(body.status, "signed");
   });
+});
+
+// --- review finding 2, Lote F: pin every request to the configured channel ---
+
+const OTHER_CHANNEL = `C${"B".repeat(55)}`;
+
+test("POST /vouchers whose M1 channel differs from the configured CHANNEL_CONTRACT is rejected unsigned, never signed (review finding 2, Lote F)", async () => {
+  const service = makeService();
+  await withRouteApp(
+    service,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/vouchers`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-gateway-token": GATEWAY_TOKEN },
+        body: JSON.stringify(m1({ channel: OTHER_CHANNEL })),
+      });
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { status: string; reason?: string; retryable?: boolean };
+      assert.equal(body.status, "unsigned");
+      assert.equal(body.reason, "channel_not_found");
+      assert.equal(body.retryable, false);
+    },
+    { channel: CHANNEL },
+  );
+});
+
+test("POST /vouchers with no M1 channel falls back to the configured CHANNEL_CONTRACT and signs against it (review finding 2, Lote F)", async () => {
+  const voucherLog = openVoucherLog();
+  const service = makeService({ voucherLog });
+  await withRouteApp(
+    service,
+    async (baseUrl) => {
+      const { channel: _channel, ...withoutChannel } = m1();
+      const response = await fetch(`${baseUrl}/vouchers`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-gateway-token": GATEWAY_TOKEN },
+        body: JSON.stringify(withoutChannel),
+      });
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { status: string; channel?: string };
+      assert.equal(body.status, "signed");
+      assert.equal(body.channel, CHANNEL);
+    },
+    { channel: CHANNEL },
+  );
+  assert.ok(voucherLog.getHighest(CHANNEL), "the voucher must be recorded against the configured channel");
 });

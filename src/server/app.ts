@@ -111,12 +111,20 @@ export function createServerApp(options: CreateServerAppOptions): Express {
 
   if (options.channelBoot !== undefined) {
     const channelBoot = options.channelBoot;
+    const configuredChannel = options.channel;
     // A dedicated inline guard instead of the shared `requireReady`
     // middleware: that one answers with an M2 (gateway-facing) unsigned
     // envelope, which does not fit this internal route's own
     // `{accepted, reason, detail}` shape (this route is never seen by the
     // gateway — design 4.1).
     app.post("/channel/vouchers", async (req, res, next) => {
+      if (configuredChannel === undefined) {
+        // Structurally unreachable in practice (server/main.ts only builds
+        // channelBoot together with `channel`), but kept as a defensive,
+        // typed fallback rather than a non-null assertion.
+        res.status(503).json({ accepted: false, reason: "unavailable", detail: "stage 2 channel is not configured" });
+        return;
+      }
       let state = channelBoot.getState();
       if (state.status !== "ready") {
         state = await channelBoot.ensureReady();
@@ -130,7 +138,7 @@ export function createServerApp(options: CreateServerAppOptions): Express {
       // ready after an earlier failure could silently run with no dispute
       // monitor at all. `start()` is idempotent (no-op once running).
       state.instance.closeMonitor.start();
-      await createChannelVouchersRoute({ channelService: state.instance.channelService })(req, res, next);
+      await createChannelVouchersRoute({ channelService: state.instance.channelService, channel: configuredChannel })(req, res, next);
     });
   }
 

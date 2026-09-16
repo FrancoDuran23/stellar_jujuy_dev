@@ -184,6 +184,17 @@ const agentSchema = sharedSchema.extend({
   COMMITMENT_SECRET: emptyToUndefined(
     z.string().refine(isStellarSecretSeed, "must be a 56-char secret seed starting with S").optional(),
   ),
+  // Optional on the agent (review finding 9, Lote F): this is the SAME
+  // variable the server schema requires, and with a single shared `.env`
+  // (this project's documented setup) the agent process sees it too, even
+  // though it never needed it before. When present, `config/boot.ts` cross-
+  // checks it against `Keypair.fromSecret(COMMITMENT_SECRET).rawPublicKey()`
+  // at boot — catches a copy-paste mismatch between the two secrets before
+  // the agent ever signs a voucher the server can only reject. Absent (e.g.
+  // split .env files) — the check is simply skipped; documented limitation.
+  COMMITMENT_PUBKEY: emptyToUndefined(
+    z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
+  ),
   MAX_DELTA_PER_REQUEST_RAW: rawPositiveIntegerRaw("5000000"),
   METER_REPORT_INTERVAL_MS: z.coerce.number().int().min(1).default(10000),
   // Bounds `depositPort.getDepositRaw`/`signer.sign` while `POST /vouchers`

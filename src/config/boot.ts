@@ -66,7 +66,16 @@ const AMOUNT_DECIMALS = 7;
  * below, so the gateway's `REASONS` table is never asked to recognize a
  * value it does not define (FT-R6/FT-R7).
  */
-export type UnavailableReason = Reason | "config_invalid" | "voucher_log_corrupt";
+export type UnavailableReason =
+  | Reason
+  | "config_invalid"
+  | "voucher_log_corrupt"
+  /** Review finding 2, Lote F: the channel's own `to`/`token` do not match
+   * the configured `STELLAR_RECIPIENT`/`USDC_SAC_CONTRACT`. */
+  | "channel_mismatch"
+  /** Review finding 9, Lote F: `Keypair.fromSecret(COMMITMENT_SECRET)`'s
+   * public key does not match the configured `COMMITMENT_PUBKEY`. */
+  | "commitment_key_mismatch";
 
 export type BuildResult<T> =
   | { status: "ready"; instance: T }
@@ -496,6 +505,10 @@ export function createServerChannelStatePort(env: {
           balanceRaw: state.balance,
           closeEffectiveAtLedger: state.closeEffectiveAtLedger,
           currentLedger: state.currentLedger,
+          // Review finding 2, Lote F: carried through so `channel-service.ts`
+          // can assert channel identity on every call, not just at boot.
+          to: state.to,
+          token: state.token,
         };
       } catch {
         return { found: false };
@@ -645,7 +658,7 @@ export type ServerChannelInstance = {
  */
 export async function buildServerChannelInstance(
   env: ServerEnv & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
-  deps: { voucherLogPath?: string; emit?: (input: EmitInput) => void } = {},
+  deps: { voucherLogPath?: string; emit?: (input: EmitInput) => void; statePort?: ChannelStatePort } = {},
 ): Promise<BuildResult<ServerChannelInstance>> {
   const voucherLogPath =
     deps.voucherLogPath ?? path.join(env.DATA_DIR, `vouchers-server-${env.STELLAR_NETWORK}.jsonl`);
@@ -662,11 +675,34 @@ export async function buildServerChannelInstance(
   const channel = env.CHANNEL_CONTRACT;
   try {
     const store = createChannelVoucherStore(opened.log);
-    const statePort = createServerChannelStatePort(env);
+    const statePort = deps.statePort ?? createServerChannelStatePort(env);
     const verifyPort = createServerChannelVerifyPort(env, env.COMMITMENT_PUBKEY);
     const closePort = createServerChannelClosePort(env);
     const trustlinePort = createHorizonTrustlinePort(HORIZON_URLS[env.STELLAR_NETWORK], env.USDC_ISSUER);
     const usdcBalancePort = createUsdcBalancePort(env);
+
+    // Review finding 2, Lote F: assert the channel's identity at boot, best
+    // effort. A transport failure/`found:false` here must never block
+    // startup (FC-R1's own philosophy — never let an RPC hiccup replace a
+    // real diagnosis); `channelService` re-checks the SAME invariant on
+    // every call anyway (the real defense in depth), so this is only an
+    // early, loud signal for the common "wrong CHANNEL_CONTRACT pasted into
+    // .env" mistake.
+    let boottimeInfo: ChannelChainInfo;
+    try {
+      boottimeInfo = await statePort.getChannelInfo(channel);
+    } catch {
+      boottimeInfo = { found: false };
+    }
+    if (boottimeInfo.found && (boottimeInfo.to !== env.STELLAR_RECIPIENT || boottimeInfo.token !== env.USDC_SAC_CONTRACT)) {
+      return {
+        status: "unavailable",
+        reason: "channel_mismatch",
+        detail:
+          `channel ${channel} identity mismatch at boot: to=${boottimeInfo.to} token=${boottimeInfo.token}, ` +
+          `expected to=${env.STELLAR_RECIPIENT} token=${env.USDC_SAC_CONTRACT}`,
+      };
+    }
 
     const channelService = createChannelService({
       store,
@@ -677,6 +713,7 @@ export async function buildServerChannelInstance(
       usdcBalancePort,
       funderAccount: env.FUNDER_ACCOUNT,
       recipientAccount: env.STELLAR_RECIPIENT,
+      expectedToken: env.USDC_SAC_CONTRACT,
       closeAssertAttempts: env.CLOSE_ASSERT_ATTEMPTS,
       closeAssertIntervalMs: env.CLOSE_ASSERT_INTERVAL_MS,
       ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
@@ -816,6 +853,25 @@ export async function buildAgentVouchersInstance(
   // gate, behavior is byte-for-byte the stage-1.5 fake wiring (Lote C/D) —
   // no deployment loses its existing behavior by upgrading past WU6.
   const stage2 = env.CHANNEL_CONTRACT !== undefined && env.COMMITMENT_SECRET !== undefined;
+
+  // Review finding 9, Lote F: cross-check the agent's own commitment
+  // keypair against COMMITMENT_PUBKEY, when the agent process happens to
+  // see it (see the field's own doc comment in config/env.ts) — catches a
+  // copy-paste mismatch between COMMITMENT_SECRET and COMMITMENT_PUBKEY
+  // before ever signing a voucher the server can only reject as
+  // invalid_signature. Skipped (not an error) when COMMITMENT_PUBKEY is not
+  // visible to this process at all — documented limitation.
+  if (stage2 && env.COMMITMENT_PUBKEY !== undefined) {
+    const derivedPubkeyHex = Buffer.from(Keypair.fromSecret(env.COMMITMENT_SECRET!).rawPublicKey()).toString("hex");
+    if (derivedPubkeyHex !== env.COMMITMENT_PUBKEY) {
+      return {
+        status: "unavailable",
+        reason: "commitment_key_mismatch",
+        detail: "COMMITMENT_SECRET's derived public key does not match the configured COMMITMENT_PUBKEY",
+      };
+    }
+  }
+
   const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
   const defaultSigner = stage2
     ? createServerDeliveringSigner(createRealChannelSigner(env.COMMITMENT_SECRET!, channelDeps), {

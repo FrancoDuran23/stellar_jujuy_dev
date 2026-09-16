@@ -23,6 +23,10 @@ import { createReadyRoute } from "../server/routes/health.ts";
 export type CreateAgentAppOptions = {
   boot: FailClosedBoot<VoucherService>;
   gatewayToken: string;
+  /** The configured `CHANNEL_CONTRACT` (stage 2 only) — forwarded to
+   * `createVouchersRoute` so it can pin every request to it (review finding
+   * 2, Lote F). `undefined` on a stage-1-only deployment. */
+  channel?: string;
 };
 
 /**
@@ -77,7 +81,7 @@ export function createAgentApp(options: CreateAgentAppOptions): Express {
   app.post(
     "/vouchers",
     requireReady(options.boot),
-    createVouchersRoute({ gatewayToken: options.gatewayToken, service: liveService }),
+    createVouchersRoute({ gatewayToken: options.gatewayToken, service: liveService, channel: options.channel }),
   );
 
   // Turns an express.json() body-parse failure (malformed JSON) into a

@@ -21,6 +21,8 @@ function fakeService(outcome: VoucherAcceptOutcome): ChannelService {
   };
 }
 
+const OTHER_CHANNEL = `C${"B".repeat(55)}`;
+
 function listen(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = app.listen(0, () => {
@@ -50,7 +52,10 @@ function validBody(overrides: Partial<Record<string, unknown>> = {}) {
 test("POST /channel/vouchers returns 200/accepted:true for an accepted commitment", async () => {
   const app = express();
   app.use(express.json());
-  app.post("/channel/vouchers", createChannelVouchersRoute({ channelService: fakeService({ kind: "accepted", remainingRaw: 999_000n }) }));
+  app.post(
+    "/channel/vouchers",
+    createChannelVouchersRoute({ channelService: fakeService({ kind: "accepted", remainingRaw: 999_000n }), channel: CHANNEL }),
+  );
   const { url, close } = await listen(app);
   try {
     const res = await fetch(`${url}/channel/vouchers`, {
@@ -71,7 +76,10 @@ test("POST /channel/vouchers returns 200/accepted:false with the reason for a re
   app.use(express.json());
   app.post(
     "/channel/vouchers",
-    createChannelVouchersRoute({ channelService: fakeService({ kind: "rejected", reason: "channel_exhausted", detail: "too much" }) }),
+    createChannelVouchersRoute({
+      channelService: fakeService({ kind: "rejected", reason: "channel_exhausted", detail: "too much" }),
+      channel: CHANNEL,
+    }),
   );
   const { url, close } = await listen(app);
   try {
@@ -91,7 +99,10 @@ test("POST /channel/vouchers returns 200/accepted:false with the reason for a re
 test("POST /channel/vouchers rejects a malformed body with 400", async () => {
   const app = express();
   app.use(express.json());
-  app.post("/channel/vouchers", createChannelVouchersRoute({ channelService: fakeService({ kind: "accepted", remainingRaw: 0n }) }));
+  app.post(
+    "/channel/vouchers",
+    createChannelVouchersRoute({ channelService: fakeService({ kind: "accepted", remainingRaw: 0n }), channel: CHANNEL }),
+  );
   const { url, close } = await listen(app);
   try {
     const res = await fetch(`${url}/channel/vouchers`, {
@@ -100,6 +111,28 @@ test("POST /channel/vouchers rejects a malformed body with 400", async () => {
       body: JSON.stringify(validBody({ signature: "not-hex" })),
     });
     assert.equal(res.status, 400);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /channel/vouchers rejects a channel that does not match the configured CHANNEL_CONTRACT with 400 (review finding 2, Lote F)", async () => {
+  const app = express();
+  app.use(express.json());
+  app.post(
+    "/channel/vouchers",
+    createChannelVouchersRoute({ channelService: fakeService({ kind: "accepted", remainingRaw: 0n }), channel: CHANNEL }),
+  );
+  const { url, close } = await listen(app);
+  try {
+    const res = await fetch(`${url}/channel/vouchers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(validBody({ channel: OTHER_CHANNEL })),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { channel: string };
+    assert.equal(body.channel, OTHER_CHANNEL);
   } finally {
     await close();
   }

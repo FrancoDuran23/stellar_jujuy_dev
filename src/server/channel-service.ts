@@ -28,6 +28,12 @@ export type ChannelChainInfo =
       balanceRaw: bigint;
       closeEffectiveAtLedger: number | null;
       currentLedger: number;
+      /** The channel's own `to`/`token` getters (review finding 2, Lote F):
+       * carried through so `verifyAndAccept`/`closeChannel` can assert the
+       * channel this server is talking to actually pays OUR recipient in
+       * OUR configured token, on every call — not just once at boot. */
+      to: string;
+      token: string;
     }
   | { found: false };
 
@@ -70,7 +76,8 @@ export type VoucherRejectReason =
   | "channel_exhausted"
   | "invalid_signature"
   | "stale_reading"
-  | "upstream_unavailable";
+  | "upstream_unavailable"
+  | "channel_mismatch";
 
 export type VoucherAcceptOutcome =
   | { kind: "accepted"; remainingRaw: bigint }
@@ -90,7 +97,7 @@ export type CloseOutcome =
   | { kind: "blocked"; reason: "funder_trustline_missing"; detail: string }
   | {
       kind: "failed";
-      reason: "channel_not_found" | "refund_not_received" | "close_error" | "upstream_unavailable";
+      reason: "channel_not_found" | "refund_not_received" | "close_error" | "upstream_unavailable" | "channel_mismatch";
       detail: string;
     };
 
@@ -105,8 +112,14 @@ export type ChannelServiceDeps = {
   /** Server's own `STELLAR_RECIPIENT` — review finding 7, Lote F: the
    * close-verification loop now also confirms the recipient actually
    * received at least the settled amount, not just that the funder's
-   * refund arrived. */
+   * refund arrived. Also doubles as the expected `to` for the identity
+   * check below (review finding 2). */
   recipientAccount: string;
+  /** Server's own `USDC_SAC_CONTRACT` — review finding 2, Lote F: checked
+   * against the channel's own `token` getter on every call (not just at
+   * boot) so a misconfigured/wrong channel can never silently settle in
+   * the wrong asset. */
+  expectedToken: string;
   emit?: (input: EmitInput) => void;
   /** @default 6 (design 4.2's CLOSE_ASSERT_ATTEMPTS default) */
   closeAssertAttempts?: number;
@@ -152,6 +165,17 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
     }
     if (!info.found) {
       return { kind: "rejected", reason: "channel_not_found", detail: `channel ${input.channel} not found` };
+    }
+    if (info.to !== deps.recipientAccount || info.token !== deps.expectedToken) {
+      // Review finding 2, Lote F: never serve a voucher for a channel that
+      // does not actually pay OUR recipient in OUR configured token —
+      // whether that is a wrong `channel` field or the configured
+      // CHANNEL_CONTRACT itself pointing at the wrong instance.
+      return {
+        kind: "rejected",
+        reason: "channel_mismatch",
+        detail: `channel ${input.channel} identity mismatch: to=${info.to} token=${info.token}, expected to=${deps.recipientAccount} token=${deps.expectedToken}`,
+      };
     }
     if (info.closeEffectiveAtLedger !== null) {
       return {
@@ -276,6 +300,13 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
       const detail = `channel ${channel} not found at close time`;
       emitEvent({ type: "payment.failed", sessionId: null, data: { reason: "channel_not_found_at_close", channel, detail } });
       return { kind: "failed", reason: "channel_not_found", detail };
+    }
+    if (info.to !== deps.recipientAccount || info.token !== deps.expectedToken) {
+      // Review finding 2, Lote F: never settle against a channel that does
+      // not actually pay OUR recipient in OUR configured token.
+      const detail = `channel ${channel} identity mismatch: to=${info.to} token=${info.token}, expected to=${deps.recipientAccount} token=${deps.expectedToken}`;
+      emitEvent({ type: "payment.failed", sessionId: null, data: { reason: "channel_mismatch", channel, detail } });
+      return { kind: "failed", reason: "channel_mismatch", detail };
     }
 
     const highest = deps.store.getHighest(channel);

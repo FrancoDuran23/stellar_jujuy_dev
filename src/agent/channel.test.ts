@@ -190,6 +190,38 @@ test("runChannelCli top-up: calls port.topUp and adds the amount to the cached r
   assert.equal(store.records.at(-1)!.depositRaw, "1500");
 });
 
+test("runChannelCli top-up: seeds a fresh record when none exists yet (review finding 10b, Lote F)", async () => {
+  const port = fakePort();
+  const store = fakeRecordStore();
+  const exitCode = await runChannelCli(["node", "channel.ts", "top-up", "--amount", "500"], baseEnv(), port, store, fakeIO());
+  assert.equal(exitCode, 0);
+  assert.equal(store.records.length, 1);
+  assert.equal(store.records[0]!.channel, CHANNEL);
+  assert.equal(store.records[0]!.depositRaw, "500");
+  assert.equal(store.records[0]!.refundWaitingPeriodLedgers, 0);
+  assert.equal(store.records[0]!.deployLedger, 0);
+});
+
+test("runChannelCli refuses every command on stellar:pubnet (review finding 10b, Lote F)", async () => {
+  const argvs = [
+    ["node", "channel.ts", "open", "--deposit", "1"],
+    ["node", "channel.ts", "top-up", "--amount", "1"],
+    ["node", "channel.ts", "close-start"],
+    ["node", "channel.ts", "refund"],
+    ["node", "channel.ts", "state"],
+  ];
+  for (const argv of argvs) {
+    const port = fakePort();
+    const io = fakeIO();
+    const exitCode = await runChannelCli(argv, baseEnv({ network: "stellar:pubnet" }), port, fakeRecordStore(), io);
+    assert.equal(exitCode, 1, `${argv.join(" ")} must refuse pubnet`);
+    const totalCalls =
+      port.calls.open.length + port.calls.topUp.length + port.calls.closeStart.length + port.calls.refund.length + port.calls.state.length;
+    assert.equal(totalCalls, 0, `${argv.join(" ")} must never call the ChannelPort`);
+    assert.ok(io.errors.some((line) => line.includes("stellar:pubnet")));
+  }
+});
+
 test("runChannelCli requires CHANNEL_CONTRACT for top-up/close-start/refund/state", async () => {
   for (const command of ["top-up", "close-start", "refund", "state"]) {
     const argv = command === "top-up" ? ["node", "channel.ts", command, "--amount", "1"] : ["node", "channel.ts", command];

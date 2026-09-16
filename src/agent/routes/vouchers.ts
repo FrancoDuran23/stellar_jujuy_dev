@@ -514,6 +514,13 @@ export type VouchersRouteDeps = {
    * `FailClosedBoot<VoucherService>` (`agent/app.ts`).
    */
   service: VoucherService;
+  /** The configured `CHANNEL_CONTRACT` (stage 2 only — `undefined` on a
+   * stage-1-only deployment). Review finding 2, Lote F: M1's own `channel`
+   * field used to be trusted as-is, so a wrong value there (bug, stale
+   * client cache, or tampering) would silently sign/settle against a
+   * different channel than the one the agent/server are actually
+   * configured for, zeroing the real settlement. */
+  channel?: string;
 };
 
 /**
@@ -535,7 +542,28 @@ export function createVouchersRoute(deps: VouchersRouteDeps): RequestHandler {
       res.status(400).json({ error: "invalid message1 body", issues: parsed.error.issues });
       return;
     }
-    if (parsed.data.channel === undefined) {
+
+    // Review finding 2, Lote F: pin the channel this request signs against
+    // to the configured CHANNEL_CONTRACT, never to whatever M1 happens to
+    // carry. A present-but-different M1 `channel` is rejected outright
+    // (never silently redirected); an absent one falls back to the
+    // configured channel (stage 2's only real mode — VE-R5).
+    let channel: string;
+    if (parsed.data.channel !== undefined) {
+      if (deps.channel !== undefined && parsed.data.channel !== deps.channel) {
+        const { body, status } = buildUnsigned("channel_not_found", {
+          sessionId: parsed.data.sessionId,
+          channel: parsed.data.channel,
+          meterReadingId: parsed.data.meterReadingId,
+          detail: `channel ${parsed.data.channel} does not match the configured channel`,
+        });
+        res.status(status).json(body);
+        return;
+      }
+      channel = parsed.data.channel;
+    } else if (deps.channel !== undefined) {
+      channel = deps.channel;
+    } else {
       // VE-R5: `channel` is optional in the shared M1 schema (stage 1 charge
       // mode omits it), but every request that reaches this endpoint is
       // stage-2 shaped — POST /vouchers has no other mode.
@@ -543,7 +571,7 @@ export function createVouchersRoute(deps: VouchersRouteDeps): RequestHandler {
       return;
     }
 
-    const outcome = await deps.service.handle({ ...parsed.data, channel: parsed.data.channel });
+    const outcome = await deps.service.handle({ ...parsed.data, channel });
     res.status(outcome.status).json(outcome.body);
   };
 }

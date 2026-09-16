@@ -26,6 +26,7 @@ import type { EmitInput } from "../shared/events.ts";
 const CHANNEL = `C${"A".repeat(55)}`;
 const FUNDER = "G".padEnd(56, "F");
 const RECIPIENT = "G".padEnd(56, "R");
+const TOKEN = `C${"T".repeat(55)}`;
 
 function openStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "channel-service-test-"));
@@ -42,6 +43,8 @@ function openInfo(overrides: Partial<Extract<ChannelChainInfo, { found: true }>>
     balanceRaw: 1_000_000n,
     closeEffectiveAtLedger: null,
     currentLedger: 1000,
+    to: RECIPIENT,
+    token: TOKEN,
     ...overrides,
   };
 }
@@ -63,6 +66,7 @@ function makeDeps(overrides: Partial<ChannelServiceDeps> = {}): ChannelServiceDe
     usdcBalancePort: overrides.usdcBalancePort ?? balancePort,
     funderAccount: overrides.funderAccount ?? FUNDER,
     recipientAccount: overrides.recipientAccount ?? RECIPIENT,
+    expectedToken: overrides.expectedToken ?? TOKEN,
     emit: overrides.emit ?? ((input) => events.push(input)),
     closeAssertAttempts: overrides.closeAssertAttempts ?? 3,
     closeAssertIntervalMs: overrides.closeAssertIntervalMs ?? 0,
@@ -130,6 +134,24 @@ test("verifyAndAccept: channel_not_found when the state port reports found:false
   assert.equal(outcome.kind, "rejected");
   if (outcome.kind !== "rejected") return;
   assert.equal(outcome.reason, "channel_not_found");
+});
+
+test("verifyAndAccept: channel_mismatch when the channel's own `to` does not match our configured recipient (review finding 2, Lote F)", async () => {
+  const deps = makeDeps({ statePort: { async getChannelInfo() { return openInfo({ to: "G".padEnd(56, "X") }); } } });
+  const service = createChannelService(deps);
+  const outcome = await service.verifyAndAccept(voucherInput());
+  assert.equal(outcome.kind, "rejected");
+  if (outcome.kind !== "rejected") return;
+  assert.equal(outcome.reason, "channel_mismatch");
+});
+
+test("verifyAndAccept: channel_mismatch when the channel's own `token` does not match our configured USDC_SAC_CONTRACT (review finding 2, Lote F)", async () => {
+  const deps = makeDeps({ statePort: { async getChannelInfo() { return openInfo({ token: `C${"X".repeat(55)}` }); } } });
+  const service = createChannelService(deps);
+  const outcome = await service.verifyAndAccept(voucherInput());
+  assert.equal(outcome.kind, "rejected");
+  if (outcome.kind !== "rejected") return;
+  assert.equal(outcome.reason, "channel_mismatch");
 });
 
 test("verifyAndAccept: a replayed/lower amount is stale_reading, not re-verified as if new", async () => {
@@ -281,6 +303,20 @@ test("closeChannel: nothing_to_close when no voucher was ever accepted — close
   assert.equal(outcome.kind, "nothing_to_close");
   assert.equal(closeCalls, 0);
   assert.ok(deps.events.some((e) => e.type === "channel.close_skipped"));
+});
+
+test("closeChannel: channel_mismatch (never calls close()) when the channel's own to/token do not match ours (review finding 2, Lote F)", async () => {
+  let closeCalls = 0;
+  const deps = makeDeps({
+    statePort: { async getChannelInfo() { return openInfo({ to: "G".padEnd(56, "X") }); } },
+    closePort: { async close() { closeCalls += 1; return { txHash: "should-not-happen" }; } },
+  });
+  const service = createChannelService(deps);
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.equal(outcome.kind, "failed");
+  if (outcome.kind !== "failed") return;
+  assert.equal(outcome.reason, "channel_mismatch");
+  assert.equal(closeCalls, 0);
 });
 
 test("closeChannel: a throwing statePort never rejects and is reported as upstream_unavailable", async () => {

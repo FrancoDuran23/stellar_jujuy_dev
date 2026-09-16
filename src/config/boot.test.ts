@@ -272,6 +272,68 @@ test("buildServerChannelInstance: a healthy voucher log goes ready with a channe
   assert.equal(result.instance.closeMonitor.getState().running, false);
 });
 
+test("buildServerChannelInstance: unavailable/channel_mismatch when the channel's own to/token do not match STELLAR_RECIPIENT/USDC_SAC_CONTRACT at boot (review finding 2, Lote F)", async () => {
+  const dir = makeChannelTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-server-testnet.jsonl");
+
+  const parsed = parseServerEnv(validServerChannelRawEnv(dir));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const result = await buildServerChannelInstance(
+    parsed.value as typeof parsed.value & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
+    {
+      voucherLogPath,
+      statePort: {
+        async getChannelInfo() {
+          return {
+            found: true,
+            depositRaw: 1000n,
+            balanceRaw: 1000n,
+            closeEffectiveAtLedger: null,
+            currentLedger: 1,
+            to: "G".padEnd(56, "Z"), // != STELLAR_RECIPIENT
+            token: parsed.value.USDC_SAC_CONTRACT,
+          };
+        },
+      },
+    },
+  );
+  assert.equal(result.status, "unavailable");
+  if (result.status !== "unavailable") return;
+  assert.equal(result.reason, "channel_mismatch");
+});
+
+test("buildServerChannelInstance: a matching channel identity at boot goes ready (review finding 2, Lote F)", async () => {
+  const dir = makeChannelTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-server-testnet.jsonl");
+
+  const parsed = parseServerEnv(validServerChannelRawEnv(dir));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const result = await buildServerChannelInstance(
+    parsed.value as typeof parsed.value & { CHANNEL_CONTRACT: string; COMMITMENT_PUBKEY: string; FUNDER_ACCOUNT: string },
+    {
+      voucherLogPath,
+      statePort: {
+        async getChannelInfo() {
+          return {
+            found: true,
+            depositRaw: 1000n,
+            balanceRaw: 1000n,
+            closeEffectiveAtLedger: null,
+            currentLedger: 1,
+            to: parsed.value.STELLAR_RECIPIENT,
+            token: parsed.value.USDC_SAC_CONTRACT,
+          };
+        },
+      },
+    },
+  );
+  assert.equal(result.status, "ready");
+});
+
 test("createServerChannelBoot: a malformed FEE_PAYER_SECRET checksum becomes unavailable/config_invalid, never an uncaught rejection (FC-R2)", async () => {
   const dir = makeChannelTempDir();
   const boot = createServerChannelBoot({
@@ -379,6 +441,43 @@ test("buildAgentVouchersInstance: an explicit signer/depositPort override always
   });
   assert.equal(outcome.body.status, "signed");
   assert.equal(signCalls, 1);
+});
+
+test("buildAgentVouchersInstance: unavailable/commitment_key_mismatch when COMMITMENT_PUBKEY does not match COMMITMENT_SECRET's derived key (review finding 9, Lote F)", async () => {
+  const dir = makeTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-agent-testnet.jsonl");
+
+  const env = parseAgentEnv({
+    ...validAgentRawEnv,
+    CHANNEL_CONTRACT: "C".padEnd(56, "A"),
+    COMMITMENT_SECRET: Keypair.random().secret(),
+    COMMITMENT_PUBKEY: "a".repeat(64), // deliberately wrong
+  });
+  assert.equal(env.ok, true);
+  if (!env.ok) return;
+
+  const result = await buildAgentVouchersInstance(env.value, { voucherLogPath });
+  assert.equal(result.status, "unavailable");
+  if (result.status !== "unavailable") return;
+  assert.equal(result.reason, "commitment_key_mismatch");
+});
+
+test("buildAgentVouchersInstance: a matching COMMITMENT_PUBKEY goes ready (review finding 9, Lote F)", async () => {
+  const dir = makeTempDir();
+  const voucherLogPath = path.join(dir, "vouchers-agent-testnet.jsonl");
+  const commitmentKeypair = Keypair.random();
+
+  const env = parseAgentEnv({
+    ...validAgentRawEnv,
+    CHANNEL_CONTRACT: "C".padEnd(56, "A"),
+    COMMITMENT_SECRET: commitmentKeypair.secret(),
+    COMMITMENT_PUBKEY: Buffer.from(commitmentKeypair.rawPublicKey()).toString("hex"),
+  });
+  assert.equal(env.ok, true);
+  if (!env.ok) return;
+
+  const result = await buildAgentVouchersInstance(env.value, { voucherLogPath });
+  assert.equal(result.status, "ready");
 });
 
 test("createAgentBoot: a corrupt voucher log makes the whole boot unavailable, mapping to internal_error for M2 (FC-R5)", async () => {
