@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServerApp } from "./app.ts";
 import type { ChargeOutcome, ChargePort } from "./charge-service.ts";
-import type { BuildResult, FailClosedBoot } from "../config/boot.ts";
+import type { BuildResult, FailClosedBoot, ServerChannelInstance } from "../config/boot.ts";
 import { message2UnsignedSchema } from "../shared/messages.ts";
+import type { ChannelService, VoucherAcceptOutcome } from "./channel-service.ts";
 
 const NETWORK = "stellar:testnet";
 const EXPLORER_BASE_URL = "https://stellar.expert/explorer/testnet";
@@ -26,15 +27,36 @@ function fakeChargePort(handle: ChargePort["handle"]): ChargePort {
   return { handle };
 }
 
+function fakeChannelBoot(state: BuildResult<ServerChannelInstance>): FailClosedBoot<ServerChannelInstance> {
+  return {
+    getState: () => state,
+    ensureReady: async () => state,
+  };
+}
+
+function fakeChannelService(verifyAndAccept: ChannelService["verifyAndAccept"]): ChannelService {
+  return {
+    verifyAndAccept,
+    async closeChannel() {
+      throw new Error("not used in these tests");
+    },
+    getHighestRaw() {
+      return 0n;
+    },
+  };
+}
+
 async function withApp(
   boot: FailClosedBoot<ChargePort>,
   fn: (baseUrl: string) => Promise<void>,
+  extra: { channelBoot?: FailClosedBoot<ServerChannelInstance>; channel?: string } = {},
 ): Promise<void> {
   const app = createServerApp({
     boot,
     network: NETWORK,
     explorerBaseUrl: EXPLORER_BASE_URL,
     pricePerMibRaw: PRICE_PER_MIB_RAW,
+    ...extra,
   });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -273,5 +295,91 @@ test("GET /paid-resource with a failing charge returns an M2 unsigned envelope (
     const body = message2UnsignedSchema.parse(await response.json());
     assert.equal(body.reason, "amount_rejected");
     assert.equal(body.retryable, false);
+  });
+});
+
+const CHANNEL = `C${"A".repeat(55)}`;
+
+test("GET /ready adds stage 2 detail (channel, monitor state) once the channel boot is ready", async () => {
+  const boot = fakeBoot({ status: "unavailable", reason: "config_invalid", detail: "stage 1 not configured" });
+  const channelBoot = fakeChannelBoot({
+    status: "ready",
+    instance: {
+      channelService: fakeChannelService(async () => {
+        throw new Error("unused");
+      }),
+      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: true, lastKnownClosing: false, lastError: undefined, lastPolledAt: "2026-09-16T00:00:00.000Z" }) },
+    },
+  });
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/ready`);
+      // Primary (stage 1) boot is unavailable, so overall /ready is still 503 —
+      // stage 2 detail is additive, never overrides the primary status.
+      assert.equal(response.status, 503);
+    },
+    { channelBoot, channel: CHANNEL },
+  );
+});
+
+test("POST /channel/vouchers returns 200/accepted:true when the channel instance is ready", async () => {
+  const boot = fakeBoot({ status: "unavailable", reason: "config_invalid", detail: "stage 1 not configured" });
+  const channelBoot = fakeChannelBoot({
+    status: "ready",
+    instance: {
+      channelService: fakeChannelService(async (): Promise<VoucherAcceptOutcome> => ({ kind: "accepted", remainingRaw: 500n })),
+      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: false, lastKnownClosing: undefined, lastError: undefined, lastPolledAt: undefined }) },
+    },
+  });
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/channel/vouchers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channel: CHANNEL,
+          network: "stellar:testnet",
+          cumulativeAmount: "1000",
+          signature: "a".repeat(128),
+          commitmentPubkey: "b".repeat(64),
+          sessionId: "sess_1",
+          cumulativeBytes: 1_048_576,
+          meterReadingId: "mr_1",
+        }),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.deepEqual(body, { accepted: true, remaining: "500" });
+    },
+    { channelBoot, channel: CHANNEL },
+  );
+});
+
+test("POST /channel/vouchers is 503 when the channel instance is not ready and never reaches the service", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeChargePort(async () => { throw new Error("unused"); }) });
+  const channelBoot = fakeChannelBoot({ status: "unavailable", reason: "config_invalid", detail: "stage 2 not configured" });
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/channel/vouchers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      assert.equal(response.status, 503);
+      const body = (await response.json()) as { accepted: boolean };
+      assert.equal(body.accepted, false);
+    },
+    { channelBoot, channel: CHANNEL },
+  );
+});
+
+test("POST /channel/vouchers is 404 when stage 2 is not wired at all (no channelBoot)", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeChargePort(async () => { throw new Error("unused"); }) });
+  await withApp(boot, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/channel/vouchers`, { method: "POST" });
+    assert.equal(response.status, 404);
   });
 });

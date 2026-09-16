@@ -4,11 +4,12 @@
 // built in `config/boot.ts`.
 
 import express, { type ErrorRequestHandler, type Express } from "express";
-import type { FailClosedBoot } from "../config/boot.ts";
+import type { FailClosedBoot, ServerChannelInstance } from "../config/boot.ts";
 import type { EmitInput } from "../shared/events.ts";
 import { buildUnsigned } from "../shared/messages.ts";
 import { createChargeService, type ChargePort } from "./charge-service.ts";
 import { createChargeRoute, type CumulativeBytesStore } from "./routes/charge.ts";
+import { createChannelVouchersRoute } from "./routes/channel.ts";
 import { createHealthRoute, createReadyRoute } from "./routes/health.ts";
 import { requireReady } from "./middleware/require-ready.ts";
 
@@ -21,6 +22,12 @@ export type CreateServerAppOptions = {
   /** Defaults to stdout-only `emit()`; `server/main.ts` passes the
    * webhook-enabled emitter (T4.2) when `BACKEND_EVENTS_URL` is set. */
   emit?: (input: EmitInput) => void;
+  /** Stage 2 (WU7) — omitted entirely on a stage-1-only deployment. When
+   * present, `/channel/vouchers` is mounted behind its own `requireReady`
+   * and `/ready` gains `stage: 2` detail (channel id, close-monitor
+   * state/error) once it goes ready. */
+  channelBoot?: FailClosedBoot<ServerChannelInstance>;
+  channel?: string;
 };
 
 /**
@@ -70,10 +77,47 @@ const jsonErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
 export function createServerApp(options: CreateServerAppOptions): Express {
   const app = express();
   app.disable("x-powered-by");
+  app.use(express.json());
 
   // FC-R6: /health and /ready are never behind requireReady.
   app.get("/health", createHealthRoute());
-  app.get("/ready", createReadyRoute(options.boot));
+  app.get(
+    "/ready",
+    createReadyRoute(options.boot, () => {
+      if (options.channelBoot === undefined) return {};
+      const channelState = options.channelBoot.getState();
+      if (channelState.status !== "ready") {
+        return { stage: 2, channel: options.channel, channelStatus: "unavailable", channelReason: channelState.reason };
+      }
+      const monitorState = channelState.instance.closeMonitor.getState();
+      return {
+        stage: 2,
+        channel: options.channel,
+        channelStatus: "ready",
+        monitor: monitorState,
+      };
+    }),
+  );
+
+  if (options.channelBoot !== undefined) {
+    const channelBoot = options.channelBoot;
+    // A dedicated inline guard instead of the shared `requireReady`
+    // middleware: that one answers with an M2 (gateway-facing) unsigned
+    // envelope, which does not fit this internal route's own
+    // `{accepted, reason, detail}` shape (this route is never seen by the
+    // gateway — design 4.1).
+    app.post("/channel/vouchers", async (req, res, next) => {
+      let state = channelBoot.getState();
+      if (state.status !== "ready") {
+        state = await channelBoot.ensureReady();
+      }
+      if (state.status !== "ready") {
+        res.status(503).json({ accepted: false, reason: "unavailable", detail: state.detail });
+        return;
+      }
+      await createChannelVouchersRoute({ channelService: state.instance.channelService })(req, res, next);
+    });
+  }
 
   const chargeRoute = createChargeRoute(
     {

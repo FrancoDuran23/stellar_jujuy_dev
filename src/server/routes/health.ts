@@ -20,12 +20,24 @@ export function createHealthRoute(): RequestHandler {
  * (design 4.5) since it uses the instance's actual HTTP status, not just the
  * JSON body.
  */
-export function createReadyRoute<T>(boot: Pick<FailClosedBoot<T>, "getState">): RequestHandler {
+/**
+ * `extra` (WU7): an optional thunk returning additional fields to merge into
+ * the JSON body — `server/app.ts` uses it to add `stage: 2`, the channel id,
+ * and the close-monitor's last known state/error once stage 2 is
+ * configured, without this generic route needing to know anything about
+ * channels. Never called for the `unavailable` branch of the PRIMARY boot
+ * (a broken base instance is reported on its own terms first); stage-2
+ * detail is additive only when the primary instance is otherwise `ready`.
+ */
+export function createReadyRoute<T>(
+  boot: Pick<FailClosedBoot<T>, "getState">,
+  extra?: () => Record<string, unknown>,
+): RequestHandler {
   return (_req, res) => {
     const state = boot.getState();
     const checkedAt = new Date().toISOString();
     if (state.status === "ready") {
-      res.status(200).json({ status: "ready", stage: 1, checkedAt });
+      res.status(200).json({ status: "ready", stage: 1, checkedAt, ...(extra ? extra() : {}) });
       return;
     }
     res
