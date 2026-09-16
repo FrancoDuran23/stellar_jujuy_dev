@@ -110,6 +110,19 @@ export async function getBalanceRaw(deps: ChannelContractDeps, channel: string):
   return BigInt(result.value as bigint | number | string);
 }
 
+/** Generic SEP-41 `balance(address)` read (spike `lib-helpers.mjs::
+ * usdcBalance`) — used for the pre-close trustline-adjacent check and the
+ * post-close balance-delta assertion (CL-R9, CL-R10). Free, read-only. */
+export async function getSep41BalanceRaw(
+  deps: ChannelContractDeps,
+  tokenContract: string,
+  accountId: string,
+): Promise<bigint> {
+  const result = await simulateGetter(deps, tokenContract, "balance", nativeToScVal(accountId, { type: "address" }));
+  if (!result.ok) throw new Error(`getSep41BalanceRaw: ${result.error}`);
+  return BigInt(result.value as bigint | number | string);
+}
+
 /**
  * `deposited()` — MISSING on the wasm revision this project deploys against
  * (spike Part C: "deposited/withdrawn → both fail, function not found").
@@ -236,20 +249,40 @@ export function assertCommitmentBinds(
   }
 }
 
-/** Builds a `Keypair` from a raw 32-byte ed25519 seed given as 64 hex chars
- * (`COMMITMENT_SECRET`'s format — config/env.ts's `isHex64` — a raw ed25519
- * seed, NOT a Stellar `S...` strkey secret). */
-export function commitmentKeypairFromHexSeed(commitmentSecretHex: string): Keypair {
-  return Keypair.fromRawEd25519Seed(Buffer.from(commitmentSecretHex, "hex"));
+/**
+ * Builds a `Keypair` from `COMMITMENT_SECRET` — a Stellar strkey secret
+ * seed (`S...`, 56 chars, `config/env.ts`'s `isStellarSecretSeed`), the same
+ * format `SIGNER_SECRET`/`FEE_PAYER_SECRET` use, and what
+ * `Keypair.random()` produces (the spike generated the commitment key this
+ * way — `scratchpad/spike/run-c-open-channel2.mjs`).
+ *
+ * NOT a raw 32-byte ed25519 seed hex string, even though `COMMITMENT_PUBKEY`
+ * (the OTHER half of this same keypair) is stored as raw public-key hex
+ * (`Buffer.from(commitmentKp.rawPublicKey()).toString('hex')` — required by
+ * the contract constructor's `BytesN<32>` argument and by
+ * `verifyCommitmentSignature` below). Mixed formats for the two halves of
+ * one keypair, confirmed correct empirically against the live `.env`:
+ * `Keypair.fromSecret(COMMITMENT_SECRET).rawPublicKey()` hex-encodes to
+ * exactly `COMMITMENT_PUBKEY`. An earlier revision of this module
+ * (`commitmentKeypairFromHexSeed`, since renamed) wrongly assumed
+ * `COMMITMENT_SECRET` was also raw hex and called
+ * `Keypair.fromRawEd25519Seed(Buffer.from(secret, "hex"))` — silently wrong
+ * for an `S...` string (not valid hex, `Buffer.from` does not throw, it
+ * just stops at the first invalid nibble) — caught while preparing the
+ * stage-2 live smoke test against the real, pre-provisioned channel #2
+ * `.env`, see docs/sdd/payments-mpp.md §6, Lote E.
+ */
+export function commitmentKeypairFromSecret(commitmentSecret: string): Keypair {
+  return Keypair.fromSecret(commitmentSecret);
 }
 
 /** ed25519-signs `bytes` and returns `{signature, commitmentPubkey}` as hex,
  * matching `agent/signer.ts`'s `SignResult` shape exactly. */
 export function signCommitmentBytes(
-  commitmentSecretHex: string,
+  commitmentSecret: string,
   bytes: Buffer,
 ): { signature: string; commitmentPubkey: string } {
-  const keypair = commitmentKeypairFromHexSeed(commitmentSecretHex);
+  const keypair = commitmentKeypairFromSecret(commitmentSecret);
   const signature = keypair.sign(bytes).toString("hex");
   const commitmentPubkey = Buffer.from(keypair.rawPublicKey()).toString("hex");
   return { signature, commitmentPubkey };

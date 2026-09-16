@@ -22,7 +22,7 @@ const CHANNEL = `C${"A".repeat(55)}`;
 const FUNDER_KEYPAIR = Keypair.random();
 const FUNDER_SECRET = FUNDER_KEYPAIR.secret();
 const RECIPIENT = Keypair.random().publicKey();
-const COMMITMENT_SECRET_HEX = "a".repeat(64);
+const COMMITMENT_SECRET = Keypair.random().secret();
 
 function baseEnv(overrides: Partial<CliEnv> = {}): CliEnv {
   return {
@@ -30,7 +30,7 @@ function baseEnv(overrides: Partial<CliEnv> = {}): CliEnv {
     recipientPublicKey: RECIPIENT,
     usdcContract: `C${"C".repeat(55)}`,
     network: "stellar:testnet",
-    commitmentSecretHex: COMMITMENT_SECRET_HEX,
+    commitmentSecret: COMMITMENT_SECRET,
     channelContract: CHANNEL,
     ...overrides,
   };
@@ -156,7 +156,7 @@ test("runChannelCli open: calls port.open with the parsed args, writes the recor
   assert.equal(store.records[0]!.depositRaw, "50000000");
   const allOutput = [...io.logs, ...io.errors].join("\n");
   assert.equal(allOutput.includes(FUNDER_SECRET), false);
-  assert.equal(allOutput.includes(COMMITMENT_SECRET_HEX), false);
+  assert.equal(allOutput.includes(COMMITMENT_SECRET), false);
   assert.ok(io.logs.some((line) => line.startsWith("CHANNEL_CONTRACT=")));
   assert.ok(io.logs.includes(`FUNDER_ACCOUNT=${FUNDER_KEYPAIR.publicKey()}`));
 });
@@ -164,7 +164,7 @@ test("runChannelCli open: calls port.open with the parsed args, writes the recor
 test("runChannelCli open: fails cleanly without COMMITMENT_SECRET", async () => {
   const exitCode = await runChannelCli(
     ["node", "channel.ts", "open", "--deposit", "1"],
-    baseEnv({ commitmentSecretHex: undefined }),
+    baseEnv({ commitmentSecret: undefined }),
     fakePort(),
     fakeRecordStore(),
     fakeIO(),

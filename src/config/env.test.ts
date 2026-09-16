@@ -105,10 +105,19 @@ test("parseAgentEnv rejects a malformed SIGNER_SECRET", () => {
 });
 
 test("parseAgentEnv rejects a malformed COMMITMENT_SECRET when present", () => {
-  const result = parseAgentEnv({ ...validAgentEnv, COMMITMENT_SECRET: "not-hex" });
+  const result = parseAgentEnv({ ...validAgentEnv, COMMITMENT_SECRET: "not-a-secret" });
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.match(result.detail, /COMMITMENT_SECRET/);
+});
+
+test("parseAgentEnv rejects a COMMITMENT_SECRET that looks like raw hex instead of a Stellar secret seed", () => {
+  // Regression: COMMITMENT_SECRET is a Stellar secret seed (S..., 56 chars),
+  // the same format as SIGNER_SECRET/FEE_PAYER_SECRET — NOT a raw 32-byte
+  // ed25519 seed hex string. An earlier revision of this schema (isHex64)
+  // accepted exactly this shape and silently mis-parsed the real .env value.
+  const result = parseAgentEnv({ ...validAgentEnv, COMMITMENT_SECRET: "a".repeat(64) });
+  assert.equal(result.ok, false);
 });
 
 test("parseAgentEnv rejects CHANNEL_CONTRACT without COMMITMENT_SECRET (WU6 stage-2 gate)", () => {
@@ -122,7 +131,7 @@ test("parseAgentEnv accepts CHANNEL_CONTRACT with COMMITMENT_SECRET", () => {
   const result = parseAgentEnv({
     ...validAgentEnv,
     CHANNEL_CONTRACT: "C".padEnd(56, "A"),
-    COMMITMENT_SECRET: "b".repeat(64),
+    COMMITMENT_SECRET: "S".padEnd(56, "B"),
   });
   assert.equal(result.ok, true);
 });

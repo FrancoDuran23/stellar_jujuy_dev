@@ -20,7 +20,7 @@ import {
   buildRefundTx,
   buildTopUpTx,
   channelAddressFromOpenResult,
-  commitmentKeypairFromHexSeed,
+  commitmentKeypairFromSecret,
   feeChargedOf,
   getBalanceRaw,
   getChannelIdentity,
@@ -81,7 +81,7 @@ export type CliEnv = {
   funderSecret: string;
   recipientPublicKey: string;
   usdcContract: string;
-  commitmentSecretHex?: string;
+  commitmentSecret?: string;
   channelContract?: string;
   network: Network;
 };
@@ -158,12 +158,12 @@ export async function runChannelCli(
   }
 
   if (parsed.command === "open") {
-    if (env.commitmentSecretHex === undefined) {
+    if (env.commitmentSecret === undefined) {
       io.error(JSON.stringify({ level: "error", msg: "COMMITMENT_SECRET must be set to open a channel" }));
       return 1;
     }
     const commitmentPubkeyHex = Buffer.from(
-      commitmentKeypairFromHexSeed(env.commitmentSecretHex).rawPublicKey(),
+      commitmentKeypairFromSecret(env.commitmentSecret).rawPublicKey(),
     ).toString("hex");
     const result = await port.open({
       depositRaw: parsed.depositRaw,
@@ -334,7 +334,7 @@ function readCliEnv(): CliEnv {
     recipientPublicKey,
     usdcContract,
     network,
-    ...(process.env.COMMITMENT_SECRET ? { commitmentSecretHex: process.env.COMMITMENT_SECRET } : {}),
+    ...(process.env.COMMITMENT_SECRET ? { commitmentSecret: process.env.COMMITMENT_SECRET } : {}),
     ...(process.env.CHANNEL_CONTRACT ? { channelContract: process.env.CHANNEL_CONTRACT } : {}),
   };
 }

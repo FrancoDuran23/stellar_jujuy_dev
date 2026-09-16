@@ -343,7 +343,7 @@ test("buildAgentVouchersInstance: an explicit signer/depositPort override always
   const env = parseAgentEnv({
     ...validAgentRawEnv,
     CHANNEL_CONTRACT: "C".padEnd(56, "A"),
-    COMMITMENT_SECRET: "a".repeat(64),
+    COMMITMENT_SECRET: Keypair.random().secret(),
   });
   assert.equal(env.ok, true);
   if (!env.ok) return;

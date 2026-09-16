@@ -7,10 +7,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { StrKey, xdr, nativeToScVal } from "@stellar/stellar-sdk";
+import { Keypair, StrKey, xdr, nativeToScVal } from "@stellar/stellar-sdk";
 import {
   assertCommitmentBinds,
-  commitmentKeypairFromHexSeed,
+  commitmentKeypairFromSecret,
   decodeCommitmentBytes,
   signCommitmentBytes,
   verifyCommitmentSignature,
@@ -102,12 +102,17 @@ test("assertCommitmentBinds rejects a wrong network hash", () => {
   );
 });
 
-const TEST_SEED_HEX = randomBytes(32).toString("hex");
+// A real Stellar secret seed (S..., 56 chars) — commitmentKeypairFromSecret
+// expects the same format as SIGNER_SECRET/FEE_PAYER_SECRET, NOT a raw
+// 32-byte ed25519 seed hex string (see the doc comment on that function for
+// why: the real COMMITMENT_SECRET in .env is this format, discovered while
+// preparing the stage-2 live smoke test).
+const TEST_COMMITMENT_SECRET = Keypair.random().secret();
 
 test("signCommitmentBytes is deterministic (RFC 8032): same input, same signature", () => {
   const bytes = buildCommitmentBytes({ amount: 7n });
-  const first = signCommitmentBytes(TEST_SEED_HEX, bytes);
-  const second = signCommitmentBytes(TEST_SEED_HEX, bytes);
+  const first = signCommitmentBytes(TEST_COMMITMENT_SECRET, bytes);
+  const second = signCommitmentBytes(TEST_COMMITMENT_SECRET, bytes);
   assert.equal(first.signature, second.signature);
   assert.equal(first.commitmentPubkey, second.commitmentPubkey);
   assert.match(first.signature, /^[0-9a-f]{128}$/);
@@ -115,15 +120,15 @@ test("signCommitmentBytes is deterministic (RFC 8032): same input, same signatur
 });
 
 test("signCommitmentBytes produces a different signature for a different amount", () => {
-  const a = signCommitmentBytes(TEST_SEED_HEX, buildCommitmentBytes({ amount: 1n }));
-  const b = signCommitmentBytes(TEST_SEED_HEX, buildCommitmentBytes({ amount: 2n }));
+  const a = signCommitmentBytes(TEST_COMMITMENT_SECRET, buildCommitmentBytes({ amount: 1n }));
+  const b = signCommitmentBytes(TEST_COMMITMENT_SECRET, buildCommitmentBytes({ amount: 2n }));
   assert.notEqual(a.signature, b.signature);
   assert.equal(a.commitmentPubkey, b.commitmentPubkey);
 });
 
 test("verifyCommitmentSignature accepts a real signature and rejects a tampered one", () => {
   const bytes = buildCommitmentBytes({ amount: 99n });
-  const { signature, commitmentPubkey } = signCommitmentBytes(TEST_SEED_HEX, bytes);
+  const { signature, commitmentPubkey } = signCommitmentBytes(TEST_COMMITMENT_SECRET, bytes);
   assert.equal(verifyCommitmentSignature(commitmentPubkey, bytes, signature), true);
 
   const tamperedBytes = buildCommitmentBytes({ amount: 100n });
@@ -133,8 +138,8 @@ test("verifyCommitmentSignature accepts a real signature and rejects a tampered 
   assert.equal(verifyCommitmentSignature(commitmentPubkey, bytes, wrongSignatureHex), false);
 });
 
-test("commitmentKeypairFromHexSeed's public key matches what signCommitmentBytes reports", () => {
-  const keypair = commitmentKeypairFromHexSeed(TEST_SEED_HEX);
-  const { commitmentPubkey } = signCommitmentBytes(TEST_SEED_HEX, buildCommitmentBytes({}));
+test("commitmentKeypairFromSecret's public key matches what signCommitmentBytes reports", () => {
+  const keypair = commitmentKeypairFromSecret(TEST_COMMITMENT_SECRET);
+  const { commitmentPubkey } = signCommitmentBytes(TEST_COMMITMENT_SECRET, buildCommitmentBytes({}));
   assert.equal(Buffer.from(keypair.rawPublicKey()).toString("hex"), commitmentPubkey);
 });

@@ -162,8 +162,15 @@ const agentSchema = sharedSchema.extend({
   SIGNER_SECRET: z
     .string()
     .refine(isStellarSecretSeed, "must be a 56-char secret seed starting with S"),
+  // A Stellar secret seed (S..., 56 chars) — the SAME format as SIGNER_SECRET/
+  // FEE_PAYER_SECRET, NOT a raw 32-byte ed25519 seed hex string. Corrected
+  // (was isHex64) after the real, pre-provisioned .env for the live stage-2
+  // smoke test turned out to hold an S... secret produced by Keypair.random()
+  // (scratchpad/spike/run-c-open-channel2.mjs) — see shared/stellar/
+  // channel-contract.ts's commitmentKeypairFromSecret doc comment and
+  // docs/sdd/payments-mpp.md §6, Lote E.
   COMMITMENT_SECRET: emptyToUndefined(
-    z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
+    z.string().refine(isStellarSecretSeed, "must be a 56-char secret seed starting with S").optional(),
   ),
   MAX_DELTA_PER_REQUEST_RAW: rawPositiveIntegerRaw("5000000"),
   METER_REPORT_INTERVAL_MS: z.coerce.number().int().min(1).default(10000),

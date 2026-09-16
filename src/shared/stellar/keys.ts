@@ -31,7 +31,10 @@ export function isStellarSecretSeed(value: unknown): value is string {
   return typeof value === "string" && SECRET_SEED_RE.test(value);
 }
 
-/** 64 lowercase/uppercase hex chars: an ed25519 public key or COMMITMENT_SECRET. */
+/** 64 lowercase/uppercase hex chars: a raw ed25519 public key
+ * (COMMITMENT_PUBKEY). NOT used for COMMITMENT_SECRET — that is a Stellar
+ * secret seed (S..., isStellarSecretSeed), see config/env.ts and
+ * shared/stellar/channel-contract.ts's commitmentKeypairFromSecret. */
 export function isHex64(value: unknown): value is string {
   return typeof value === "string" && HEX_64_RE.test(value);
 }
