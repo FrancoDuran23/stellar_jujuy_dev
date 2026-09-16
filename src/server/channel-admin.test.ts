@@ -36,7 +36,11 @@ function minimalServerEnv(overrides: Record<string, string> = {}): Record<string
 function runAdmin(command: string, envOverrides: Record<string, string> = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "channel-admin-test-"));
   const env = { ...minimalServerEnv(envOverrides), PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "" };
-  return spawnSync(process.execPath, [SCRIPT, command], { cwd, env, encoding: "utf8", timeout: 10_000 });
+  // A generous timeout: this spawns a real node process that loads the full
+  // @stellar/stellar-sdk import chain before the pubnet guard even runs —
+  // slow under load, but still never touches the network (the guard exits
+  // before any RPC call).
+  return spawnSync(process.execPath, [SCRIPT, command], { cwd, env, encoding: "utf8", timeout: 30_000 });
 }
 
 test("channel-admin refuses to run any command against stellar:pubnet (review finding 10b, Lote F)", () => {
