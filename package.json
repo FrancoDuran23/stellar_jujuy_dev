@@ -11,11 +11,13 @@
     "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\" \"scripts/**/*.test.ts\"",
     "verify:deps": "node scripts/verify-deps.mjs",
     "preflight": "node scripts/preflight.ts",
-    "channel:open": "node src/cli/open-channel.ts",
-    "channel:top-up": "node src/cli/top-up.ts",
-    "channel:close": "node src/cli/close-channel.ts",
-    "channel:close-start": "node src/cli/close-start.ts",
-    "channel:refund": "node src/cli/refund.ts"
+    "channel:open": "node src/agent/channel.ts open",
+    "channel:top-up": "node src/agent/channel.ts top-up",
+    "channel:close-start": "node src/agent/channel.ts close-start",
+    "channel:refund": "node src/agent/channel.ts refund",
+    "channel:state": "node src/agent/channel.ts state",
+    "channel-admin:state": "node src/server/channel-admin.ts state",
+    "channel-admin:close": "node src/server/channel-admin.ts close"
   },
   "dependencies": {
     "@stellar/mpp": "0.7.1",
