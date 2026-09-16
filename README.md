@@ -51,33 +51,51 @@ Requires `CHANNEL_CONTRACT` set (the stage-2 switch — see `.env.example`):
 the server also then requires `COMMITMENT_PUBKEY`/`FUNDER_ACCOUNT`, the
 agent also requires `COMMITMENT_SECRET`.
 
+Both channel CLIs below (`agent/channel.ts`, `server/channel-admin.ts`) are
+testnet-only demo tools — every subcommand refuses to run at all when
+`STELLAR_NETWORK=stellar:pubnet`, so a copy-pasted `.env` can never move
+real funds through them (`docs/sdd/payments-mpp.md` §6, "Lote F", finding
+10b).
+
 - `npm run channel:open -- --deposit <raw> [--waiting-period <ledgers>]` —
   funder-side: deploys a new channel instance (`createCustomContract`
   against the shared testnet wasm), prints `CHANNEL_CONTRACT=`/
   `COMMITMENT_PUBKEY=`/`FUNDER_ACCOUNT=` to paste into `.env` (never a
   secret), and writes `data/channel-{network}.json` (the deposit record of
   truth — the deployed wasm has no `deposited()` getter).
-- `npm run channel:top-up -- --amount <raw>` — funder-side top-up.
+- `npm run channel:top-up -- --amount <raw>` — funder-side top-up. Updates
+  the existing local deposit record, or seeds a fresh one (with a
+  documented `0` placeholder for `refundWaitingPeriodLedgers`/
+  `deployLedger`, which nothing reads back) when the channel was opened
+  outside this CLI and no local record exists yet — the deposit is never
+  silently dropped.
 - `npm run channel:close-start` / `npm run channel:refund` — funder's
   unilateral exit (waits `refund_waiting_period` ledgers between the two).
 - `npm run channel:state` — prints the contract getters, on-chain dispute
   state (`closeEffectiveAtLedger`/`pendingDispute`), from the funder's view.
 - Once `npm run server` is running with stage 2 configured, it also serves
   `POST /channel/vouchers` (internal, agent-only — never called by the
-  gateway) and runs the close_start dispute monitor
+  gateway; rejects a `channel` that does not match the configured
+  `CHANNEL_CONTRACT` with a 400) and runs the close_start dispute monitor
   (`CHANNEL_POLL_INTERVAL_MS`, default 30s, plus a `watchChannel()`-backed
-  near-real-time watch); `/ready` gains `stage: 2`, the channel id, and the
-  monitor's last known state/error.
+  near-real-time watch, backed up by a poll-to-poll balance-drop signal);
+  `/ready` gains `stage: 2`, the channel id, and the monitor's last known
+  state/error, and now fails (503) if the channel instance is not ready or
+  its monitor is not running.
 - `npm run channel-admin:state` / `npm run channel-admin:close` —
   recipient/operator side: read the channel's state (including the
   server's own highest accepted commitment) or close it on purpose (the
   same trustline check + balance-delta assertion the dispute monitor uses).
-- `npm run agent:serve`'s `POST /vouchers` signs and, once
+- `npm run agent:serve`'s `POST /vouchers` pins every request to the
+  configured `CHANNEL_CONTRACT` (a different `channel` in the request is
+  rejected unsigned, never silently redirected) and signs and, once
   `CHANNEL_CONTRACT`/`COMMITMENT_SECRET` are set, also delivers the signed
   commitment to the payment server before acknowledging the gateway
   (`reason` can be `channel_exhausted`/`channel_closing`/
   `channel_not_found`/`channel_not_open` in addition to the stage-1
-  reasons — see `docs/sdd/payments-mpp.md` §3.7).
+  reasons — a `channel` in the request that does not match the configured
+  `CHANNEL_CONTRACT` is also `channel_not_found`, never silently redirected
+  — see `docs/sdd/payments-mpp.md` §3.7).
 
 ## Quick path
 
