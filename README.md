@@ -7,14 +7,17 @@ gateway/meter can bill by bytes consumed. Full requirements and design live in
 
 ## Status
 
-Stage 1 (sponsored charge server + headless agent client) and stage 1.5
-(`POST /vouchers` against simulated consumption, with a `serve` mode for the
-agent) are implemented — `npm run server`, `npm run agent`, and
-`npm run agent:serve` all work. The channel CLIs (`channel:*`, escalón 2,
-`WU6` onward) are not built yet and remain behind the **T8.2** human gate
-(see `docs/sdd/payments-mpp.md` §5/§6). What already works: dependency
-install, type checking, the full unit test suite, `verify:deps`, and both
-processes end-to-end against a real testnet `.env`.
+Stage 1 (sponsored charge server + headless agent client), stage 1.5
+(`POST /vouchers` against simulated consumption), and stage 2 (payment
+channel: open/top-up/close-start/refund, real commitment signing and
+verification, close with trustline check and balance-delta assertion,
+close_start dispute monitor) are all implemented and verified live against
+testnet (`docs/sdd/payments-mpp.md` §6, "Lote E"). One known gap: no
+`settle` (periodic partial withdrawal) — the only wasm revision deployable
+today has no `settle` function; the recipient collects only by closing the
+channel. Building the current `main` branch of `one-way-channel` (which has
+`settle`) needs a Rust + `wasm32v1-none` + `stellar` CLI toolchain, not
+available in this environment.
 
 ## Running it
 
@@ -42,6 +45,40 @@ processes end-to-end against a real testnet `.env`.
   400; a value that does not advance past the last billed one (including a
   repeat of the same value) is a 200 M2 `stale_reading` — no charge attempt.
 
+### Stage 2 (payment channel)
+
+Requires `CHANNEL_CONTRACT` set (the stage-2 switch — see `.env.example`):
+the server also then requires `COMMITMENT_PUBKEY`/`FUNDER_ACCOUNT`, the
+agent also requires `COMMITMENT_SECRET`.
+
+- `npm run channel:open -- --deposit <raw> [--waiting-period <ledgers>]` —
+  funder-side: deploys a new channel instance (`createCustomContract`
+  against the shared testnet wasm), prints `CHANNEL_CONTRACT=`/
+  `COMMITMENT_PUBKEY=`/`FUNDER_ACCOUNT=` to paste into `.env` (never a
+  secret), and writes `data/channel-{network}.json` (the deposit record of
+  truth — the deployed wasm has no `deposited()` getter).
+- `npm run channel:top-up -- --amount <raw>` — funder-side top-up.
+- `npm run channel:close-start` / `npm run channel:refund` — funder's
+  unilateral exit (waits `refund_waiting_period` ledgers between the two).
+- `npm run channel:state` — prints the contract getters, on-chain dispute
+  state (`closeEffectiveAtLedger`/`pendingDispute`), from the funder's view.
+- Once `npm run server` is running with stage 2 configured, it also serves
+  `POST /channel/vouchers` (internal, agent-only — never called by the
+  gateway) and runs the close_start dispute monitor
+  (`CHANNEL_POLL_INTERVAL_MS`, default 30s, plus a `watchChannel()`-backed
+  near-real-time watch); `/ready` gains `stage: 2`, the channel id, and the
+  monitor's last known state/error.
+- `npm run channel-admin:state` / `npm run channel-admin:close` —
+  recipient/operator side: read the channel's state (including the
+  server's own highest accepted commitment) or close it on purpose (the
+  same trustline check + balance-delta assertion the dispute monitor uses).
+- `npm run agent:serve`'s `POST /vouchers` signs and, once
+  `CHANNEL_CONTRACT`/`COMMITMENT_SECRET` are set, also delivers the signed
+  commitment to the payment server before acknowledging the gateway
+  (`reason` can be `channel_exhausted`/`channel_closing`/
+  `channel_not_found`/`channel_not_open` in addition to the stage-1
+  reasons — see `docs/sdd/payments-mpp.md` §3.7).
+
 ## Quick path
 
 1. Install Node `>=22.18` (type stripping runs `.ts` files directly — no
@@ -60,7 +97,7 @@ processes end-to-end against a real testnet `.env`.
 | Topic | Decision |
 |-------|----------|
 | Language | TypeScript, executed directly by Node's built-in type stripping. No `tsc` build step; `npm run check` only type-checks. |
-| Module boundaries | One npm package, folder-enforced boundaries: `shared/` has zero knowledge of `agent/`, `server/`, `cli/`, or `persistence/`. See `docs/sdd/payments-mpp.md` §4.1. |
+| Module boundaries | One npm package, folder-enforced boundaries: `shared/` has zero knowledge of `agent/`, `server/`, or `persistence/`. Channel CLIs live at `agent/channel.ts` (funder) and `server/channel-admin.ts` (operator), not a separate top-level `cli/` folder. See `docs/sdd/payments-mpp.md` §4.1 and §6 "Lote E". |
 | Testing | `node:test` + `node:assert/strict`, no test framework dependency. SDK and RPC calls are mocked through explicit ports (`ChannelPort`, `RpcPort`, `ChargePort`, `TrustlinePort`); disk persistence is never mocked — those tests write to a real `fs.mkdtemp` directory. |
 | Dependency pins | Every dependency is pinned exactly (no `^`/`~`). `npm run verify:deps` enforces a single resolved copy of `@stellar/stellar-sdk` and `mppx`. |
 | Money | All amounts are raw-unit strings handled as `BigInt`. Never `Number`, never floating point. |
@@ -79,5 +116,14 @@ processes end-to-end against a real testnet `.env`.
 **T8.2 is closed** (2026-09-15): two real, sponsored testnet charges settled
 end-to-end (fee payer = recipient, agent XLM balance unchanged). Evidence,
 both transaction hashes, and balances before/after are in
-`docs/sdd/payments-mpp.md` §6, "T8.2 — evidencia testnet". Escalón 2
-(`WU6`/`WU7`) work can now start.
+`docs/sdd/payments-mpp.md` §6, "T8.2 — evidencia testnet".
+
+**Escalón 2 (WU6/WU7) is closed** (2026-09-16, "Lote E"): channel open/
+top-up/close-start/refund, real commitment signing/verification, and close
+with a trustline check + balance-delta assertion, all verified live against
+testnet — full M1→M2 loop against the demo channel (`reused`/`stale_reading`/
+`channel_exhausted` all exercised), plus a full open→voucher→close cycle on
+a throwaway channel with both transaction hashes confirmed on Horizon. See
+`docs/sdd/payments-mpp.md` §6, "Lote E" for the evidence, deviations, and
+known limitations (no `settle` on the deployable wasm; one channel per
+server process).
