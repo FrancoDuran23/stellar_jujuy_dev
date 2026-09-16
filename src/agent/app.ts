@@ -18,6 +18,7 @@ import { toM2Reason } from "../config/boot.ts";
 import { buildUnsigned } from "../shared/messages.ts";
 import { createVouchersRoute, type VoucherService } from "./routes/vouchers.ts";
 import { requireReady } from "../server/middleware/require-ready.ts";
+import { createReadyRoute } from "../server/routes/health.ts";
 
 export type CreateAgentAppOptions = {
   boot: FailClosedBoot<VoucherService>;
@@ -63,10 +64,14 @@ export function createAgentApp(options: CreateAgentAppOptions): Express {
   app.disable("x-powered-by");
   app.use(express.json());
 
-  // FC-R6: /health is never behind requireReady.
+  // FC-R6: /health and /ready are never behind requireReady.
   app.get("/health", (_req, res) => {
     res.status(200).json({ status: "alive" });
   });
+  // Review finding, Lote D (MEDIUM): mounted with the same generic route
+  // `server/app.ts` uses, so `config_invalid` and `voucher_log_corrupt` are
+  // distinguishable here too instead of both collapsing into a plain 503.
+  app.get("/ready", createReadyRoute(options.boot));
 
   const liveService = createLiveVoucherService(options.boot);
   app.post(

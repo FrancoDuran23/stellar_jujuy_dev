@@ -38,7 +38,17 @@ export type OpenVoucherLogResult =
 
 const voucherRecordSchema = z.object({
   v: z.literal(1),
-  ts: z.string().min(1),
+  // Same rule as the wire schema's `message2SignedSchema.signedAt`
+  // (`shared/messages.ts`) — UTC only, no offset — since `ts` is always
+  // written from `now().toISOString()` and is later echoed back verbatim as
+  // `signedAt` on a replayed/idempotent read (`resolveEqual` in
+  // `agent/routes/vouchers.ts`). Was `z.string().min(1)` (review finding,
+  // Lote D): any non-empty string passed replay, so a record with an offset
+  // timestamp (or any other non-ISO junk) could sit in the index until a
+  // later `resolveEqual` handed it to `message2SignedSchema.parse` and threw.
+  // Tightening it here means such a line is now rejected at open()/replay()
+  // time instead of blowing up mid-request.
+  ts: z.iso.datetime(),
   network: z.string().min(1),
   channel: z.string().min(1),
   sessionId: z.string().min(1),

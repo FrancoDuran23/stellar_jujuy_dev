@@ -121,6 +121,10 @@ const agentSchema = sharedSchema.extend({
   COMMITMENT_SECRET: z.string().refine(isHex64, "must be exactly 64 hex characters").optional(),
   MAX_DELTA_PER_REQUEST_RAW: rawPositiveIntegerRaw("5000000"),
   METER_REPORT_INTERVAL_MS: z.coerce.number().int().min(1).default(10000),
+  // Bounds `depositPort.getDepositRaw`/`signer.sign` while `POST /vouchers`
+  // holds the per-channel mutex (review finding, Lote D): neither call may
+  // hang the lock indefinitely. See `agent/routes/vouchers.ts`.
+  PORT_CALL_TIMEOUT_MS: z.coerce.number().int().min(1).default(10000),
 });
 
 export type AgentEnv = z.infer<typeof agentSchema>;

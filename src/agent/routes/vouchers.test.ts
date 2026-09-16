@@ -15,12 +15,13 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import express from "express";
-import { VoucherLog } from "../../persistence/voucher-log.ts";
+import { VoucherLog, type VoucherRecord } from "../../persistence/voucher-log.ts";
 import { createFakeSigner, type SignerPort } from "../signer.ts";
 import {
   createStaticDepositPort,
   createVoucherService,
   createVouchersRoute,
+  type ChannelDepositPort,
   type Message1WithChannel,
   type VoucherService,
   type VoucherServiceDeps,
@@ -55,6 +56,7 @@ function makeService(overrides: Partial<VoucherServiceDeps> = {}): VoucherServic
     maxDeltaPerRequestRaw: overrides.maxDeltaPerRequestRaw ?? MAX_DELTA_PER_REQUEST_RAW,
     ...(overrides.emit !== undefined ? { emit: overrides.emit } : {}),
     ...(overrides.now !== undefined ? { now: overrides.now } : {}),
+    ...(overrides.portCallTimeoutMs !== undefined ? { portCallTimeoutMs: overrides.portCallTimeoutMs } : {}),
   });
 }
 
@@ -284,6 +286,118 @@ test("a stale reading concurrent with a valid higher reading is still reported s
     assert.equal(staleOutcome.body.reason, "stale_reading");
   }
   assert.equal(higherOutcome.body.status, "signed");
+});
+
+// --- Review findings, Lote D: processBatch always settles, timeouts, and
+// event-sink isolation ---
+
+test("a throw during classification (malformed persisted ts) settles 503 internal_error instead of hanging, and releases the lock (review finding 1)", async () => {
+  const voucherLog = openVoucherLog();
+  // Simulates a record persisted before the `ts` schema was tightened
+  // (`persistence/voucher-log.ts`): `append()` itself never validates its
+  // argument, so this reaches the in-memory index exactly like a replayed
+  // pre-existing line with the previously-accepted "any non-empty string"
+  // shape would. An offset timestamp is accepted by `voucherRecordSchema`
+  // before the fix but rejected by `message2SignedSchema.signedAt`
+  // (`z.iso.datetime()`, no offset) — so `resolveEqual`'s `.parse()` used to
+  // throw synchronously, mid-batch, with nothing to catch it.
+  const badTs = "2026-09-20T18:04:02.118+02:00";
+  const record: VoucherRecord = {
+    v: 1,
+    ts: badTs,
+    network: NETWORK,
+    channel: CHANNEL,
+    sessionId: "sess_prev",
+    cumulativeAmount: PRICE_PER_MIB_RAW.toString(),
+    cumulativeBytes: Number(MIB),
+    signature: "a".repeat(128),
+    commitmentPubkey: "b".repeat(64),
+    meterReadingId: "mr_prev",
+  };
+  voucherLog.append(record);
+
+  const service = makeService({ voucherLog });
+  // Same cumulativeAmount as the corrupt record above -> classified "equal"
+  // -> resolveEqual -> message2SignedSchema.parse({ signedAt: badTs }) throws.
+  const outcome = await service.handle(m1({ cumulativeAmount: PRICE_PER_MIB_RAW.toString(), meterReadingId: "mr_next" }));
+  assert.equal(outcome.status, 503);
+  assert.equal(outcome.body.status, "unsigned");
+  if (outcome.body.status !== "unsigned") return;
+  assert.equal(outcome.body.reason, "internal_error");
+  assert.equal(outcome.body.retryable, true);
+
+  // The lock must be released: a normal higher reading on the same channel
+  // still works right after.
+  const next = await service.handle(
+    m1({ cumulativeBytes: MIB * 2n, cumulativeAmount: (PRICE_PER_MIB_RAW * 2n).toString(), meterReadingId: "mr_after" }),
+  );
+  assert.equal(next.body.status, "signed");
+});
+
+test("a hanging depositPort.getDepositRaw times out as upstream_unavailable and releases the lock (review finding 7)", async () => {
+  const hangingDepositPort: ChannelDepositPort = {
+    getDepositRaw: () => new Promise(() => {}),
+  };
+  const service = makeService({ depositPort: hangingDepositPort, portCallTimeoutMs: 20 });
+
+  const first = await service.handle(m1({ meterReadingId: "mr_1" }));
+  assert.equal(first.status, 503);
+  if (first.body.status !== "unsigned") throw new Error("unreachable");
+  assert.equal(first.body.reason, "upstream_unavailable");
+  assert.equal(first.body.retryable, true);
+
+  // If the mutex failed to release after the timeout this would hang forever
+  // instead of settling.
+  const second = await service.handle(m1({ meterReadingId: "mr_2" }));
+  assert.equal(second.status, 503);
+});
+
+test("a hanging signer.sign times out as signer_unavailable instead of hanging the response (review finding 7)", async () => {
+  const hangingSigner: SignerPort = { sign: () => new Promise(() => {}) };
+  const service = makeService({ signer: hangingSigner, portCallTimeoutMs: 20 });
+
+  const outcome = await service.handle(m1());
+  assert.equal(outcome.status, 503);
+  if (outcome.body.status !== "unsigned") throw new Error("unreachable");
+  assert.equal(outcome.body.reason, "signer_unavailable");
+  assert.equal(outcome.body.retryable, true);
+});
+
+test("a throwing event sink never turns an already-persisted voucher into a 503 (review finding 6)", async () => {
+  const voucherLog = openVoucherLog();
+  const throwingEmit: VoucherServiceDeps["emit"] = () => {
+    throw new Error("sink exploded");
+  };
+  const service = makeService({ voucherLog, emit: throwingEmit });
+
+  const outcome = await service.handle(m1());
+  assert.equal(outcome.status, 200);
+  assert.equal(outcome.body.status, "signed");
+  assert.ok(voucherLog.getHighest(CHANNEL), "the voucher must still be persisted");
+});
+
+test("append (fsync included) happens before handle() resolves (VP-R3, review finding 8)", async () => {
+  const voucherLog = openVoucherLog();
+  const callOrder: string[] = [];
+  const originalAppend = voucherLog.append.bind(voucherLog);
+  const spyLog = new Proxy(voucherLog, {
+    get(target, prop, receiver) {
+      if (prop === "append") {
+        return (record: VoucherRecord) => {
+          callOrder.push("append");
+          originalAppend(record);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as VoucherLog;
+
+  const service = makeService({ voucherLog: spyLog });
+  const outcome = await service.handle(m1());
+  callOrder.push("resolved");
+
+  assert.equal(outcome.body.status, "signed");
+  assert.deepEqual(callOrder, ["append", "resolved"]);
 });
 
 // --- HTTP adapter: auth, schema validation, channel-required (VE-R1, VE-R2, VE-R5) ---

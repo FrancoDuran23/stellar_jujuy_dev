@@ -48,6 +48,46 @@ test("GET /health is 200 even while the vouchers instance is unavailable (FC-R6)
   }
 });
 
+test("GET /ready is 200 with stage 1 when the vouchers instance is ready (review finding 4)", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeVoucherService(async () => { throw new Error("unused"); }) });
+  const app = createAgentApp({ boot, gatewayToken: GATEWAY_TOKEN });
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/ready`);
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { status: string };
+    assert.equal(body.status, "ready");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GET /ready distinguishes config_invalid from voucher_log_corrupt (review finding 4)", async () => {
+  const boot = fakeBoot({
+    status: "unavailable",
+    reason: "voucher_log_corrupt",
+    detail: "voucher log has a corrupt line that is not the last one",
+  });
+  const app = createAgentApp({ boot, gatewayToken: GATEWAY_TOKEN });
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/ready`);
+    assert.equal(response.status, 503);
+    const body = (await response.json()) as { status: string; reason: string };
+    assert.equal(body.status, "unavailable");
+    // Unlike a POST /vouchers 503 (mapped via toM2Reason), /ready shows the
+    // real, specific reason — config_invalid and voucher_log_corrupt must
+    // stay distinguishable here.
+    assert.equal(body.reason, "voucher_log_corrupt");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("POST /vouchers when not ready responds 503 + M2 envelope + Retry-After, never reaching the vouchers route (FC-R5, FC-R6)", async () => {
   const boot = fakeBoot({
     status: "unavailable",

@@ -35,6 +35,8 @@ import {
   type Message1,
   type Message2,
 } from "../../shared/messages.ts";
+import type { Reason } from "../../shared/reasons.ts";
+import { TimeoutError, withTimeout } from "../../shared/retry.ts";
 import type { VoucherLog, VoucherIndexEntry, VoucherRecord } from "../../persistence/voucher-log.ts";
 import { createChannelMutex } from "../mutex.ts";
 import { checkGuardrails } from "../guardrails.ts";
@@ -64,6 +66,19 @@ function clampMin0(value: bigint): bigint {
   return value < 0n ? 0n : value;
 }
 
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Bound applied to `depositPort.getDepositRaw` and `signer.sign` while the
+ * per-channel mutex (VE-R12) holds the lock (review finding, Lote D): neither
+ * is a business decision — both are outgoing calls to a dependency that can
+ * hang — and an unbounded `await` there would hold the lock, and therefore
+ * every queued `handle()` promise for that channel, forever. Overridable via
+ * `PORT_CALL_TIMEOUT_MS` (`config/env.ts`); this is only the fallback used by
+ * tests and any caller that does not go through `config/boot.ts`. */
+export const DEFAULT_PORT_CALL_TIMEOUT_MS = 10_000;
+
 /** Constant-time token comparison (spec 3.9: `GATEWAY_TOKEN` "comparación en
  * tiempo constante"). Hashing both sides first sidesteps `timingSafeEqual`
  * throwing on a length mismatch, without leaking the real token's length. */
@@ -87,6 +102,9 @@ export type VoucherServiceDeps = {
   emit?: (input: EmitInput) => void;
   /** Injectable clock for deterministic `ts`/`signedAt` in tests. */
   now?: () => Date;
+  /** Bounds `depositPort.getDepositRaw`/`signer.sign` under the channel lock
+   * (review finding, Lote D). @default DEFAULT_PORT_CALL_TIMEOUT_MS */
+  portCallTimeoutMs?: number;
 };
 
 export type VoucherOutcome = { body: Message2; status: 200 | 503 };
@@ -152,6 +170,7 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
   const pendingBatches = new Map<string, PendingEntry[]>();
   const emitEvent = deps.emit ?? defaultEmit;
   const now = deps.now ?? (() => new Date());
+  const portCallTimeoutMs = deps.portCallTimeoutMs ?? DEFAULT_PORT_CALL_TIMEOUT_MS;
 
   function resolveEqual(entry: PendingEntry, previous: VoucherIndexEntry, depositRaw: bigint): void {
     const remaining = clampMin0(depositRaw - previous.cumulativeAmountRaw);
@@ -198,8 +217,8 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
     entry.resolve({ body, status });
   }
 
-  function resolveInternalError(entry: PendingEntry, detail: string): void {
-    const { body, status } = buildUnsigned("internal_error", {
+  function resolveFailure(entry: PendingEntry, reason: Reason, detail: string): void {
+    const { body, status } = buildUnsigned(reason, {
       sessionId: entry.m1.sessionId,
       channel: entry.m1.channel,
       meterReadingId: entry.m1.meterReadingId,
@@ -208,102 +227,173 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
     entry.resolve({ body, status });
   }
 
+  /**
+   * Settles every entry of `batch` still pending once `processBatch` returns
+   * or throws (review finding, Lote D, MAJOR): a throw that escapes every
+   * inner try/catch below used to leave the corresponding `handle()`
+   * promise(s) unsettled forever, since the mutex's own `.finally().catch(()
+   * => {})` (`agent/mutex.ts`) exists only to silence the duplicate
+   * rejection on its *internal* chain, never to resolve the caller's
+   * promise. Concrete trigger this closed: a persisted voucher record whose
+   * `ts` predates the tightened schema (see `persistence/voucher-log.ts`)
+   * could carry an offset timestamp; replaying it into `previous.ts` and
+   * later handing it to `message2SignedSchema.parse` inside `resolveEqual`
+   * threw synchronously, mid-classification, with no try/catch around that
+   * loop at all.
+   *
+   * Implementation: wrapping every `entry.resolve` up front means the
+   * existing `resolveEqual`/`resolveStale`/`resolveRejected`/`resolveFailure`
+   * call sites below need no change to be tracked — whichever one (or the
+   * final `entry.resolve({...})` for the signed branch) actually settles an
+   * entry removes it from `unresolved` as a side effect.
+   */
   async function processBatch(channel: string, batch: PendingEntry[]): Promise<void> {
-    let previous: VoucherIndexEntry | undefined;
-    let depositRaw: bigint;
-    try {
-      previous = deps.voucherLog.getHighest(channel);
-      depositRaw = await deps.depositPort.getDepositRaw(channel);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      for (const entry of batch) resolveInternalError(entry, detail);
-      return;
-    }
-    const previousAmountRaw = previous?.cumulativeAmountRaw ?? 0n;
-
-    const classified = batch.map((entry) => classify(entry, previous, deps.pricePerMibRaw, deps.maxDeltaPerRequestRaw));
-    const candidates: Array<{ entry: PendingEntry; amount: bigint }> = [];
-
-    for (const c of classified) {
-      if (c.kind === "equal") {
-        resolveEqual(c.entry, previous!, depositRaw);
-      } else if (c.kind === "stale") {
-        resolveStale(c.entry, previous!, depositRaw);
-      } else if (c.kind === "rejected") {
-        resolveRejected(c.entry, c.detail, previousAmountRaw, depositRaw);
-      } else {
-        candidates.push({ entry: c.entry, amount: c.amount });
-      }
-    }
-
-    if (candidates.length === 0) {
-      return;
-    }
-
-    const winner = candidates.reduce((max, c) => (c.amount > max.amount ? c : max));
-
-    try {
-      const signResult = await deps.signer.sign({
-        channel,
-        network: deps.network,
-        cumulativeAmount: winner.amount.toString(),
-      });
-
-      const record: VoucherRecord = {
-        v: 1,
-        ts: now().toISOString(),
-        network: deps.network,
-        channel,
-        sessionId: winner.entry.m1.sessionId,
-        cumulativeAmount: winner.amount.toString(),
-        cumulativeBytes: winner.entry.m1.cumulativeBytes,
-        signature: signResult.signature,
-        commitmentPubkey: signResult.commitmentPubkey,
-        meterReadingId: winner.entry.m1.meterReadingId,
+    const unresolved = new Set<PendingEntry>(batch);
+    for (const entry of batch) {
+      const settle = entry.resolve;
+      entry.resolve = (outcome) => {
+        unresolved.delete(entry);
+        settle(outcome);
       };
-      // Append + fsync happen inside `append()` — BEFORE any of this
-      // batch's responses are sent (VP-R3).
-      deps.voucherLog.append(record);
+    }
 
-      emitEvent({
-        type: "usage.voucher_signed",
-        sessionId: winner.entry.m1.sessionId,
-        data: {
-          channel,
-          cumulativeAmount: record.cumulativeAmount,
-          meterReadingId: record.meterReadingId,
-        },
-      });
+    try {
+      let previous: VoucherIndexEntry | undefined;
+      let depositRaw: bigint;
+      try {
+        previous = deps.voucherLog.getHighest(channel);
+        depositRaw = await withTimeout(
+          () => deps.depositPort.getDepositRaw(channel),
+          portCallTimeoutMs,
+          "depositPort.getDepositRaw",
+        );
+      } catch (error) {
+        const reason: Reason = error instanceof TimeoutError ? "upstream_unavailable" : "internal_error";
+        const detail = messageOf(error);
+        for (const entry of batch) resolveFailure(entry, reason, detail);
+        return;
+      }
+      const previousAmountRaw = previous?.cumulativeAmountRaw ?? 0n;
 
-      const remaining = clampMin0(depositRaw - winner.amount);
-      for (const candidate of candidates) {
-        const body = message2SignedSchema.parse({
-          version: 1,
-          status: "signed",
-          sessionId: candidate.entry.m1.sessionId,
+      const classified = batch.map((entry) => classify(entry, previous, deps.pricePerMibRaw, deps.maxDeltaPerRequestRaw));
+      const candidates: Array<{ entry: PendingEntry; amount: bigint }> = [];
+
+      for (const c of classified) {
+        if (c.kind === "equal") {
+          resolveEqual(c.entry, previous!, depositRaw);
+        } else if (c.kind === "stale") {
+          resolveStale(c.entry, previous!, depositRaw);
+        } else if (c.kind === "rejected") {
+          resolveRejected(c.entry, c.detail, previousAmountRaw, depositRaw);
+        } else {
+          candidates.push({ entry: c.entry, amount: c.amount });
+        }
+      }
+
+      if (candidates.length === 0) {
+        return;
+      }
+
+      const winner = candidates.reduce((max, c) => (c.amount > max.amount ? c : max));
+
+      try {
+        const signResult = await withTimeout(
+          () =>
+            deps.signer.sign({
+              channel,
+              network: deps.network,
+              cumulativeAmount: winner.amount.toString(),
+            }),
+          portCallTimeoutMs,
+          "signer.sign",
+        );
+
+        const record: VoucherRecord = {
+          v: 1,
+          ts: now().toISOString(),
+          network: deps.network,
           channel,
-          voucher: {
-            cumulativeAmount: record.cumulativeAmount,
-            signature: record.signature,
-            commitmentPubkey: record.commitmentPubkey,
-            network: deps.network,
-          },
-          meterReadingId: candidate.entry.m1.meterReadingId,
-          // Coalescing (design 4.3): only the request that matched the
-          // batch's highest amount is the "new" signature; every other
-          // candidate — even though its own amount is genuinely new,
-          // never stale or equal — is already covered by this higher
-          // voucher, so it is answered exactly like VE-R9's idempotent
-          // replay: `reused: true`, no extra log line for it.
-          reused: candidate !== winner,
-          remaining: remaining.toString(),
-          signedAt: record.ts,
-        });
-        candidate.entry.resolve({ body, status: 200 });
+          sessionId: winner.entry.m1.sessionId,
+          cumulativeAmount: winner.amount.toString(),
+          cumulativeBytes: winner.entry.m1.cumulativeBytes,
+          signature: signResult.signature,
+          commitmentPubkey: signResult.commitmentPubkey,
+          meterReadingId: winner.entry.m1.meterReadingId,
+        };
+        // Append + fsync happen inside `append()` — BEFORE any of this
+        // batch's responses are sent (VP-R3).
+        deps.voucherLog.append(record);
+
+        try {
+          // A throwing/misbehaving sink must never turn an already-persisted
+          // voucher into a 503 (review finding, Lote D, MINOR): the voucher
+          // is durable on disk the moment `append()` above returns, so the
+          // event stream's health is never allowed to affect the response.
+          emitEvent({
+            type: "usage.voucher_signed",
+            sessionId: winner.entry.m1.sessionId,
+            data: {
+              channel,
+              cumulativeAmount: record.cumulativeAmount,
+              meterReadingId: record.meterReadingId,
+            },
+          });
+        } catch (error) {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              reason: "usage_voucher_signed_emit_failed",
+              detail: messageOf(error),
+              channel,
+            }),
+          );
+        }
+
+        const remaining = clampMin0(depositRaw - winner.amount);
+        for (const candidate of candidates) {
+          const body = message2SignedSchema.parse({
+            version: 1,
+            status: "signed",
+            sessionId: candidate.entry.m1.sessionId,
+            channel,
+            voucher: {
+              cumulativeAmount: record.cumulativeAmount,
+              signature: record.signature,
+              commitmentPubkey: record.commitmentPubkey,
+              network: deps.network,
+            },
+            meterReadingId: candidate.entry.m1.meterReadingId,
+            // Coalescing (design 4.3): only the request that matched the
+            // batch's highest amount is the "new" signature; every other
+            // candidate — even though its own amount is genuinely new,
+            // never stale or equal — is already covered by this higher
+            // voucher, so it is answered exactly like VE-R9's idempotent
+            // replay: `reused: true`, no extra log line for it.
+            reused: candidate !== winner,
+            remaining: remaining.toString(),
+            signedAt: record.ts,
+          });
+          candidate.entry.resolve({ body, status: 200 });
+        }
+      } catch (error) {
+        const reason: Reason = error instanceof TimeoutError ? "signer_unavailable" : "internal_error";
+        const detail = messageOf(error);
+        for (const candidate of candidates) resolveFailure(candidate.entry, reason, detail);
       }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      for (const candidate of candidates) resolveInternalError(candidate.entry, detail);
+      // Safety net (review finding, Lote D, MAJOR): whatever threw, and
+      // wherever, every request in this batch settles instead of hanging
+      // `handle()` forever. This should never actually trigger given the
+      // catches above — it exists for a failure mode neither one covers
+      // (e.g. `classify`/`resolveEqual` throwing on a malformed persisted
+      // record, see the doc comment above `unresolved`).
+      const detail = messageOf(error);
+      console.error(
+        JSON.stringify({ level: "error", reason: "voucher_batch_failed_unexpectedly", detail, channel }),
+      );
+      for (const entry of unresolved) {
+        resolveFailure(entry, "internal_error", detail);
+      }
     }
   }
 
@@ -319,11 +409,29 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
         return;
       }
       pendingBatches.set(m1.channel, [entry]);
-      void mutex.withChannelLock(m1.channel, async () => {
-        const batch = pendingBatches.get(m1.channel) ?? [entry];
-        pendingBatches.delete(m1.channel);
-        await processBatch(m1.channel, batch);
-      });
+      void mutex
+        .withChannelLock(m1.channel, async () => {
+          const batch = pendingBatches.get(m1.channel) ?? [entry];
+          pendingBatches.delete(m1.channel);
+          await processBatch(m1.channel, batch);
+        })
+        .catch((error: unknown) => {
+          // Defense in depth (review finding, Lote D, MAJOR): `processBatch`
+          // now settles every entry itself and never rethrows, so this
+          // should be unreachable — but without a `.catch()` here, any
+          // future throw between `withChannelLock` and `processBatch` (both
+          // synchronous, e.g. `pendingBatches.get`) would again be silently
+          // swallowed by the mutex's own `.finally().catch(() => {})`,
+          // leaving `handle()` hanging with no log at all.
+          console.error(
+            JSON.stringify({
+              level: "error",
+              reason: "voucher_channel_lock_failed_unexpectedly",
+              detail: messageOf(error),
+              channel: m1.channel,
+            }),
+          );
+        });
     });
   }
 

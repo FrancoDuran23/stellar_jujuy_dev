@@ -83,14 +83,37 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
-async function runAttemptWithTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+/** Thrown by `withTimeout` (and, through it, `withRetry`'s `attemptTimeoutMs`)
+ * when `fn` does not settle within `timeoutMs`. A distinct class — never a
+ * plain `Error` — so a caller can tell "this specific call hung" apart from
+ * any other rejection and react differently (review finding, Lote D:
+ * `agent/routes/vouchers.ts` maps a signer/deposit-port timeout to a
+ * specific retryable M2 reason instead of a generic `internal_error`). */
+export class TimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number, label?: string) {
+    super(label !== undefined ? `${label} timed out after ${timeoutMs}ms` : `timed out after ${timeoutMs}ms`);
+    this.name = "TimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * Races `fn()` against a timer; rejects with `TimeoutError` if the timer
+ * wins first. Exported standalone (review finding, Lote D) so a single
+ * bounded call — no retries, no backoff — can reuse the same primitive
+ * `withRetry` uses internally for `attemptTimeoutMs`, instead of a second,
+ * slightly different copy of the same race living in another module.
+ */
+export async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label?: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       fn(),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          reject(new Error(`withRetry: attempt timed out after ${timeoutMs}ms`));
+          reject(new TimeoutError(timeoutMs, label));
         }, timeoutMs);
       }),
     ]);
@@ -128,7 +151,7 @@ export async function withRetry<T>(
     }
     try {
       return attemptTimeoutMs !== undefined
-        ? await runAttemptWithTimeout(() => fn(attempt), attemptTimeoutMs)
+        ? await withTimeout(() => fn(attempt), attemptTimeoutMs)
         : await fn(attempt);
     } catch (error) {
       const isLastAttempt = attempt === maxAttempts - 1;

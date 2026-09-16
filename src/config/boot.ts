@@ -21,6 +21,7 @@ import { Receipt } from "mppx";
 import type { ChargeOutcome, ChargePort } from "../server/charge-service.ts";
 import { parseServerEnv, parseAgentEnv, type ServerEnv, type AgentEnv } from "./env.ts";
 import { isReason, type Reason } from "../shared/reasons.ts";
+import type { EmitInput } from "../shared/events.ts";
 import { VoucherLog } from "../persistence/voucher-log.ts";
 import {
   createVoucherService,
@@ -302,6 +303,10 @@ export async function buildAgentVouchersInstance(
     voucherLogPath?: string;
     signer?: SignerPort;
     depositPort?: ChannelDepositPort;
+    /** Forwarded to `createVoucherService` (`agent/main.ts`'s `serve` mode
+     * passes the webhook-enabled emitter, same pattern as
+     * `createServerBoot`/`server/main.ts`). Defaults to stdout-only `emit()`. */
+    emit?: (input: EmitInput) => void;
   } = {},
 ): Promise<BuildResult<VoucherService>> {
   const voucherLogPath =
@@ -324,6 +329,8 @@ export async function buildAgentVouchersInstance(
     network: env.STELLAR_NETWORK,
     pricePerMibRaw: env.PRICE_PER_MIB_RAW,
     maxDeltaPerRequestRaw: env.MAX_DELTA_PER_REQUEST_RAW,
+    portCallTimeoutMs: env.PORT_CALL_TIMEOUT_MS,
+    ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
   });
 
   return { status: "ready", instance: service };

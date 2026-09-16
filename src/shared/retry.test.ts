@@ -4,8 +4,10 @@ import {
   RETRY_MAX_ATTEMPTS,
   RETRY_MAX_DELAY_MS,
   RetryDeadlineExceededError,
+  TimeoutError,
   computeBackoffDelayMs,
   withRetry,
+  withTimeout,
 } from "./retry.ts";
 
 test("RETRY_MAX_ATTEMPTS is 4 (1 attempt + 3 retries)", () => {
@@ -188,4 +190,29 @@ test("withRetry's attemptTimeoutMs aborts a single hanging attempt and retries",
   );
   assert.equal(result, "recovered");
   assert.equal(calls, 2);
+});
+
+// --- withTimeout / TimeoutError (review finding, Lote D: a standalone,
+// no-retry bounded call reused by agent/routes/vouchers.ts) ---
+
+test("withTimeout resolves with fn's value when it settles before the timeout", async () => {
+  const result = await withTimeout(async () => "ok", 50);
+  assert.equal(result, "ok");
+});
+
+test("withTimeout rejects with TimeoutError, carrying the label, when fn never settles", async () => {
+  await assert.rejects(
+    () => withTimeout(() => new Promise(() => {}), 10, "some-port-call"),
+    (error: unknown) => {
+      assert.ok(error instanceof TimeoutError);
+      assert.equal(error.timeoutMs, 10);
+      assert.match(error.message, /some-port-call timed out after 10ms/);
+      return true;
+    },
+  );
+});
+
+test("withTimeout propagates fn's own rejection unchanged when it fails before the timeout", async () => {
+  const boom = new Error("boom");
+  await assert.rejects(() => withTimeout(async () => { throw boom; }, 50), boom);
 });
