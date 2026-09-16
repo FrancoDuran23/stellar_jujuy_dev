@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isNetwork, networkPassphrase } from "./network.ts";
+import { isNetwork, networkPassphrase, sanitizeNetworkForFilename } from "./network.ts";
 
 test("isNetwork accepts the two known networks", () => {
   assert.equal(isNetwork("stellar:testnet"), true);
@@ -20,4 +20,10 @@ test("networkPassphrase returns a distinct, non-empty passphrase per network", (
   assert.ok(testnet.length > 0);
   assert.ok(pubnet.length > 0);
   assert.notEqual(testnet, pubnet);
+});
+
+test("sanitizeNetworkForFilename strips ':' (Windows NTFS ADS gotcha)", () => {
+  assert.equal(sanitizeNetworkForFilename("stellar:testnet"), "stellar-testnet");
+  assert.equal(sanitizeNetworkForFilename("stellar:pubnet"), "stellar-pubnet");
+  assert.equal(sanitizeNetworkForFilename("no-colon"), "no-colon");
 });
