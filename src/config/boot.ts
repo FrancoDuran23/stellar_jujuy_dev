@@ -13,13 +13,22 @@
 // `config/boot.ts` and `agent/charge-client.ts` — everywhere else takes a
 // port as an argument).
 
+import path from "node:path";
 import { Keypair, rpc as StellarRpc } from "@stellar/stellar-sdk";
 import { Mppx, Store, stellar } from "@stellar/mpp/charge/server";
 import { fromBaseUnits } from "@stellar/mpp";
 import { Receipt } from "mppx";
 import type { ChargeOutcome, ChargePort } from "../server/charge-service.ts";
-import { parseServerEnv, type ServerEnv } from "./env.ts";
+import { parseServerEnv, parseAgentEnv, type ServerEnv, type AgentEnv } from "./env.ts";
 import { isReason, type Reason } from "../shared/reasons.ts";
+import { VoucherLog } from "../persistence/voucher-log.ts";
+import {
+  createVoucherService,
+  createStaticDepositPort,
+  type VoucherService,
+  type ChannelDepositPort,
+} from "../agent/routes/vouchers.ts";
+import { createFakeSigner, type SignerPort } from "../agent/signer.ts";
 
 const AMOUNT_DECIMALS = 7;
 
@@ -263,6 +272,88 @@ export function createServerBoot(options?: {
         return { status: "unavailable", reason: "config_invalid", detail: parsed.detail };
       }
       return buildChargeInstance(parsed.value);
+    },
+  });
+}
+
+/**
+ * Builds the agent's `POST /vouchers` instance (WU5, T5.3 deviation — Lote
+ * C): opens the voucher log and wires it into `createVoucherService`.
+ *
+ * This is where batch B's deviation 6 gets closed: FC-R3 lists "voucher log
+ * no abrible en modo append" as one of the three conditions that must make
+ * the instance `unavailable`. `VoucherLog.open()` returning `status:
+ * "corrupt"` (a corrupt line that is not the last one, VP-R6) is exactly
+ * that condition for the agent role — it is turned into `unavailable` with
+ * `reason: "voucher_log_corrupt"` here, the same way `buildServerChargeInstance`
+ * turns a failed RPC health check into `unavailable`.
+ *
+ * The real ed25519 signer and the real contract-backed deposit tracker are
+ * WU6 work (`agent/channel-cache.ts`, a `COMMITMENT_SECRET`-based signer in
+ * this same file, mirroring how the server's SDK objects are built here and
+ * nowhere else). Until then this always wires the fake signer and a static
+ * deposit — both injectable via `deps` so tests never touch the filesystem
+ * for anything but the voucher log itself (design 4.7: persistence is the
+ * one thing never mocked).
+ */
+export async function buildAgentVouchersInstance(
+  env: AgentEnv,
+  deps: {
+    voucherLogPath?: string;
+    signer?: SignerPort;
+    depositPort?: ChannelDepositPort;
+  } = {},
+): Promise<BuildResult<VoucherService>> {
+  const voucherLogPath =
+    deps.voucherLogPath ?? path.join(env.DATA_DIR, `vouchers-agent-${env.STELLAR_NETWORK}.jsonl`);
+
+  let opened: ReturnType<typeof VoucherLog.open>;
+  try {
+    opened = VoucherLog.open(voucherLogPath);
+  } catch (error) {
+    return { status: "unavailable", reason: "voucher_log_corrupt", detail: messageOf(error) };
+  }
+  if (opened.status === "corrupt") {
+    return { status: "unavailable", reason: opened.reason, detail: opened.detail };
+  }
+
+  const service = createVoucherService({
+    voucherLog: opened.log,
+    signer: deps.signer ?? createFakeSigner(),
+    depositPort: deps.depositPort ?? createStaticDepositPort(),
+    network: env.STELLAR_NETWORK,
+    pricePerMibRaw: env.PRICE_PER_MIB_RAW,
+    maxDeltaPerRequestRaw: env.MAX_DELTA_PER_REQUEST_RAW,
+  });
+
+  return { status: "ready", instance: service };
+}
+
+/**
+ * Composes env parsing + `buildAgentVouchersInstance` + the fail-closed
+ * re-arm wrapper into the `FailClosedBoot<VoucherService>` that
+ * `agent/app.ts` and `requireReady` share — the same shape as
+ * `createServerBoot`, so both processes fail closed the same way (FC-R1..
+ * FC-R8) even though only the server's boot touches the Stellar SDK today.
+ */
+export function createAgentBoot(options?: {
+  rawEnv?: Record<string, string | undefined>;
+  retryIntervalMs?: number;
+  buildVouchersInstance?: (env: AgentEnv) => Promise<BuildResult<VoucherService>>;
+  now?: () => number;
+}): FailClosedBoot<VoucherService> {
+  const rawEnv = options?.rawEnv ?? process.env;
+  const buildVouchersInstance = options?.buildVouchersInstance ?? buildAgentVouchersInstance;
+
+  return createFailClosedBoot<VoucherService>({
+    retryIntervalMs: options?.retryIntervalMs ?? DEFAULT_INIT_RETRY_INTERVAL_MS,
+    ...(options?.now !== undefined ? { now: options.now } : {}),
+    buildInstance: async () => {
+      const parsed = parseAgentEnv(rawEnv);
+      if (!parsed.ok) {
+        return { status: "unavailable", reason: "config_invalid", detail: parsed.detail };
+      }
+      return buildVouchersInstance(parsed.value);
     },
   });
 }
