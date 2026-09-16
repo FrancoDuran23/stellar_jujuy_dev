@@ -69,7 +69,8 @@ export type VoucherRejectReason =
   | "channel_closing"
   | "channel_exhausted"
   | "invalid_signature"
-  | "stale_reading";
+  | "stale_reading"
+  | "upstream_unavailable";
 
 export type VoucherAcceptOutcome =
   | { kind: "accepted"; remainingRaw: bigint }
@@ -77,8 +78,21 @@ export type VoucherAcceptOutcome =
 
 export type CloseOutcome =
   | { kind: "closed"; txHash: string; settledRaw: bigint; refundedRaw: bigint }
+  /** `close()` broadcast successfully but the funder/recipient balance
+   * deltas could not be verified (every pre- or post-close balance read
+   * failed) — review finding 1, Lote F. Distinct from `refund_not_received`
+   * (where reads succeeded but never matched): here we simply don't know,
+   * so we never claim success OR failure of the settlement itself. */
+  | { kind: "closed_unverified"; txHash: string; settledRaw: bigint }
+  /** No voucher was ever accepted for this channel — review finding 10a,
+   * Lote F. `close()` is never called with a zero/placeholder signature. */
+  | { kind: "nothing_to_close"; detail: string }
   | { kind: "blocked"; reason: "funder_trustline_missing"; detail: string }
-  | { kind: "failed"; reason: "channel_not_found" | "refund_not_received" | "close_error"; detail: string };
+  | {
+      kind: "failed";
+      reason: "channel_not_found" | "refund_not_received" | "close_error" | "upstream_unavailable";
+      detail: string;
+    };
 
 export type ChannelServiceDeps = {
   store: ChannelVoucherStore;
@@ -88,6 +102,11 @@ export type ChannelServiceDeps = {
   trustlinePort: TrustlinePort;
   usdcBalancePort: UsdcBalancePort;
   funderAccount: string;
+  /** Server's own `STELLAR_RECIPIENT` — review finding 7, Lote F: the
+   * close-verification loop now also confirms the recipient actually
+   * received at least the settled amount, not just that the funder's
+   * refund arrived. */
+  recipientAccount: string;
   emit?: (input: EmitInput) => void;
   /** @default 6 (design 4.2's CLOSE_ASSERT_ATTEMPTS default) */
   closeAssertAttempts?: number;
@@ -107,6 +126,10 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function createChannelService(deps: ChannelServiceDeps): ChannelService {
   const emitEvent = deps.emit ?? defaultEmit;
   const closeAssertAttempts = deps.closeAssertAttempts ?? 6;
@@ -114,7 +137,19 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
   const sleep = deps.sleep ?? defaultSleep;
 
   async function verifyAndAccept(input: VoucherAcceptInput): Promise<VoucherAcceptOutcome> {
-    const info = await deps.statePort.getChannelInfo(input.channel);
+    let info: ChannelChainInfo;
+    try {
+      info = await deps.statePort.getChannelInfo(input.channel);
+    } catch (error) {
+      // A statePort that throws (review finding 5, Lote F: a genuine
+      // transport failure, not a routine "not found") must never crash this
+      // route — reported as a retryable rejection instead.
+      return {
+        kind: "rejected",
+        reason: "upstream_unavailable",
+        detail: `channel state lookup failed: ${messageOf(error)}`,
+      };
+    }
     if (!info.found) {
       return { kind: "rejected", reason: "channel_not_found", detail: `channel ${input.channel} not found` };
     }
@@ -175,24 +210,68 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
     return { kind: "accepted", remainingRaw: result.remainingRaw };
   }
 
+  /** Never throws — a balance read failure is a data point ("unknown"), not
+   * a reason to abort or crash the close flow (review finding 1, Lote F:
+   * `getSep41BalanceRaw` throws on a failed simulation, and this used to sit
+   * outside every try/catch in `closeChannel`). */
+  async function readUsdcBalanceSafe(accountId: string): Promise<bigint | undefined> {
+    try {
+      return await deps.usdcBalancePort.getUsdcBalanceRaw(accountId);
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * CL-R9, CL-R10, CL-R11. Sequence, none of it skippable:
    * 1. Pre-close trustline check (CL-R9) — cheap, and `close()`'s
-   *    `try_transfer` auto-refund fails silently without it (R2).
-   * 2. Read `balanceBefore` and the highest accepted voucher.
+   *    `try_transfer` auto-refund fails silently without it (R2). Tri-state
+   *    (review finding 3, Lote F): "unknown" (Horizon down) fails OPEN —
+   *    blocking a close over a diagnosis failure is worse than proceeding.
+   * 2. Read `balanceBefore` for the funder AND the recipient, and the
+   *    highest accepted voucher (review finding 10a: no voucher at all means
+   *    there is nothing to settle — `close()` is never called with a
+   *    zero/placeholder signature).
    * 3. Call `close()`.
-   * 4. Poll `balanceAfter` up to `closeAssertAttempts` times,
-   *    `closeAssertIntervalMs` apart (CL-R10).
+   * 4. Poll both balances up to `closeAssertAttempts` times,
+   *    `closeAssertIntervalMs` apart (CL-R10), asserting each delta is AT
+   *    LEAST the expected amount (review finding 7, Lote F: `>=`, not `===`
+   *    — an unrelated USDC movement into either account must never fail
+   *    this assertion; the funder's expected refund is computed from the
+   *    on-chain `balanceRaw`, not the server's own tracked `depositRaw`,
+   *    since `balanceRaw` is what `close()` actually refunds).
+   *
+   * Never rejects — every failure mode (including a throwing balance port)
+   * resolves to a typed `CloseOutcome` so a fire-and-forget caller
+   * (`config/boot.ts`'s close-monitor wiring) can never produce an
+   * unhandled rejection (review finding 1, Lote F).
    */
   async function closeChannel(channel: string): Promise<CloseOutcome> {
-    const hasTrustline = await deps.trustlinePort.hasUsdcTrustline(deps.funderAccount);
-    if (!hasTrustline) {
+    const trustline = await deps.trustlinePort.hasUsdcTrustline(deps.funderAccount);
+    if (trustline === "no") {
       const detail = `funder ${deps.funderAccount} does not hold a USDC trustline; close blocked to avoid a silent-failing refund (R2)`;
       emitEvent({ type: "payment.failed", sessionId: null, data: { reason: "funder_trustline_missing", channel, detail } });
       return { kind: "blocked", reason: "funder_trustline_missing", detail };
     }
+    if (trustline === "unknown") {
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          reason: "funder_trustline_check_unavailable",
+          channel,
+          detail: "Horizon trustline lookup failed; proceeding with close anyway (fail-open, review finding 3, Lote F)",
+        }),
+      );
+    }
 
-    const info = await deps.statePort.getChannelInfo(channel);
+    let info: ChannelChainInfo;
+    try {
+      info = await deps.statePort.getChannelInfo(channel);
+    } catch (error) {
+      const detail = `channel state lookup failed at close time: ${messageOf(error)}`;
+      emitEvent({ type: "payment.failed", sessionId: null, data: { reason: "upstream_unavailable", channel, detail } });
+      return { kind: "failed", reason: "upstream_unavailable", detail };
+    }
     if (!info.found) {
       const detail = `channel ${channel} not found at close time`;
       emitEvent({ type: "payment.failed", sessionId: null, data: { reason: "channel_not_found_at_close", channel, detail } });
@@ -200,10 +279,17 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
     }
 
     const highest = deps.store.getHighest(channel);
-    const highestRaw = highest?.cumulativeAmountRaw ?? 0n;
-    const signatureHex = highest?.signature ?? "00".repeat(64);
-    const expectedRefundRaw = info.depositRaw - highestRaw;
-    const balanceBefore = await deps.usdcBalancePort.getUsdcBalanceRaw(deps.funderAccount);
+    if (highest === undefined) {
+      const detail = `channel ${channel} has no accepted vouchers; nothing to settle`;
+      emitEvent({ type: "channel.close_skipped", sessionId: null, data: { channel, detail } });
+      return { kind: "nothing_to_close", detail };
+    }
+    const highestRaw = highest.cumulativeAmountRaw;
+    const signatureHex = highest.signature;
+    const expectedRefundRaw = info.balanceRaw - highestRaw;
+
+    const funderBefore = await readUsdcBalanceSafe(deps.funderAccount);
+    const recipientBefore = await readUsdcBalanceSafe(deps.recipientAccount);
 
     let txHash: string;
     try {
@@ -215,25 +301,68 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
       return { kind: "failed", reason: "close_error", detail };
     }
 
-    let balanceAfter = balanceBefore;
+    if (funderBefore === undefined && recipientBefore === undefined) {
+      emitEvent({
+        type: "channel.closed",
+        sessionId: null,
+        data: { channel, settledRaw: highestRaw.toString(), txHash, closedBy: "recipient", verified: false },
+      });
+      return { kind: "closed_unverified", txHash, settledRaw: highestRaw };
+    }
+
+    let funderAfter = funderBefore;
+    let recipientAfter = recipientBefore;
+    let sawReading = false;
     for (let attempt = 0; attempt < closeAssertAttempts; attempt += 1) {
       await sleep(closeAssertIntervalMs);
-      balanceAfter = await deps.usdcBalancePort.getUsdcBalanceRaw(deps.funderAccount);
-      if (balanceAfter - balanceBefore === expectedRefundRaw) {
+      if (funderBefore !== undefined) {
+        const reading = await readUsdcBalanceSafe(deps.funderAccount);
+        if (reading !== undefined) {
+          funderAfter = reading;
+          sawReading = true;
+        }
+      }
+      if (recipientBefore !== undefined) {
+        const reading = await readUsdcBalanceSafe(deps.recipientAccount);
+        if (reading !== undefined) {
+          recipientAfter = reading;
+          sawReading = true;
+        }
+      }
+      const funderOk =
+        funderBefore === undefined || (funderAfter !== undefined && funderAfter - funderBefore >= expectedRefundRaw);
+      const recipientOk =
+        recipientBefore === undefined ||
+        (recipientAfter !== undefined && recipientAfter - recipientBefore >= highestRaw);
+      if (funderOk && recipientOk) {
+        const refundedRaw = funderAfter !== undefined && funderBefore !== undefined ? funderAfter - funderBefore : expectedRefundRaw;
         emitEvent({
           type: "channel.closed",
           sessionId: null,
-          data: { channel, settledRaw: highestRaw.toString(), refundedRaw: expectedRefundRaw.toString(), txHash, closedBy: "recipient" },
+          data: { channel, settledRaw: highestRaw.toString(), refundedRaw: refundedRaw.toString(), txHash, closedBy: "recipient" },
         });
-        return { kind: "closed", txHash, settledRaw: highestRaw, refundedRaw: expectedRefundRaw };
+        return { kind: "closed", txHash, settledRaw: highestRaw, refundedRaw };
       }
     }
 
-    const detail = `expected funder balance to increase by ${expectedRefundRaw}, observed delta ${balanceAfter - balanceBefore} after ${closeAssertAttempts} attempts`;
+    if (!sawReading) {
+      emitEvent({
+        type: "channel.closed",
+        sessionId: null,
+        data: { channel, settledRaw: highestRaw.toString(), txHash, closedBy: "recipient", verified: false },
+      });
+      return { kind: "closed_unverified", txHash, settledRaw: highestRaw };
+    }
+
+    const detail =
+      `expected funder balance to increase by at least ${expectedRefundRaw} and recipient balance by at least ${highestRaw}, ` +
+      `observed funder delta ${funderAfter !== undefined && funderBefore !== undefined ? funderAfter - funderBefore : "unknown"}, ` +
+      `recipient delta ${recipientAfter !== undefined && recipientBefore !== undefined ? recipientAfter - recipientBefore : "unknown"} ` +
+      `after ${closeAssertAttempts} attempts`;
     emitEvent({
       type: "payment.failed",
       sessionId: null,
-      data: { reason: "refund_not_received", channel, txHash, balanceBefore: balanceBefore.toString(), balanceAfter: balanceAfter.toString(), detail },
+      data: { reason: "refund_not_received", channel, txHash, detail },
     });
     return { kind: "failed", reason: "refund_not_received", detail };
   }

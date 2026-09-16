@@ -87,14 +87,24 @@ export function createServerApp(options: CreateServerAppOptions): Express {
       if (options.channelBoot === undefined) return {};
       const channelState = options.channelBoot.getState();
       if (channelState.status !== "ready") {
-        return { stage: 2, channel: options.channel, channelStatus: "unavailable", channelReason: channelState.reason };
+        return {
+          fields: { stage: 2, channel: options.channel, channelStatus: "unavailable", channelReason: channelState.reason },
+          // Review finding 6 (Lote F): CHANNEL_CONTRACT is configured, so a
+          // channel instance that is not ready must fail the WHOLE /ready
+          // check, not just annotate a 200 with a side note nobody scripts
+          // against.
+          unavailable: { reason: channelState.reason, detail: channelState.detail },
+        };
       }
       const monitorState = channelState.instance.closeMonitor.getState();
+      if (!monitorState.running) {
+        return {
+          fields: { stage: 2, channel: options.channel, channelStatus: "ready", monitor: monitorState },
+          unavailable: { reason: "close_monitor_not_running", detail: "channel instance is ready but its close-monitor is not running" },
+        };
+      }
       return {
-        stage: 2,
-        channel: options.channel,
-        channelStatus: "ready",
-        monitor: monitorState,
+        fields: { stage: 2, channel: options.channel, channelStatus: "ready", monitor: monitorState },
       };
     }),
   );
@@ -115,6 +125,11 @@ export function createServerApp(options: CreateServerAppOptions): Express {
         res.status(503).json({ accepted: false, reason: "unavailable", detail: state.detail });
         return;
       }
+      // Review finding 6 (Lote F): the re-arm path above used to never
+      // (re)start the close-monitor — a channel instance that came back
+      // ready after an earlier failure could silently run with no dispute
+      // monitor at all. `start()` is idempotent (no-op once running).
+      state.instance.closeMonitor.start();
       await createChannelVouchersRoute({ channelService: state.instance.channelService })(req, res, next);
     });
   }

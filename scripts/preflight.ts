@@ -37,12 +37,18 @@ export async function runPreflight(
 ): Promise<PreflightResult> {
   const warnings: PreflightWarning[] = [];
   for (const account of accounts) {
-    const hasTrustline = await trustlinePort.hasUsdcTrustline(account.accountId);
-    if (!hasTrustline) {
+    const status = await trustlinePort.hasUsdcTrustline(account.accountId);
+    if (status === "no") {
       warnings.push({
         role: account.role,
         accountId: account.accountId,
         detail: describeMissingTrustline(account.accountId),
+      });
+    } else if (status === "unknown") {
+      warnings.push({
+        role: account.role,
+        accountId: account.accountId,
+        detail: `could not verify a USDC trustline for account ${account.accountId} (the trustline lookup itself failed)`,
       });
     }
   }
@@ -103,9 +109,11 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
           const account = await horizon.loadAccount(accountId);
           return account.balances.some(
             (balance) => "asset_code" in balance && balance.asset_code === "USDC",
-          );
+          )
+            ? "yes"
+            : "no";
         } catch {
-          return false;
+          return "unknown";
         }
       },
     };

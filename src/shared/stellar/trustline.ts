@@ -3,9 +3,19 @@
 // implementation reads the account's trustlines via Soroban RPC and is
 // wired in `config/boot.ts` (a later work unit) — `shared/` stays SDK-free,
 // so the port is the only thing defined here.
+//
+// Tri-state result (review finding 3, Lote F): a plain boolean could not
+// distinguish "the trustline is genuinely missing" from "we could not tell
+// because Horizon errored" — the pre-fix `createHorizonTrustlinePort`
+// collapsed both into `false`, which made `close-monitor.ts`/
+// `channel-service.ts` block a close over a transient Horizon hiccup exactly
+// when a dispute needed it most. `"unknown"` lets the caller fail OPEN
+// (proceed with the close, WARN) instead of fail closed on a diagnosis
+// failure, matching this codebase's FC-R1 philosophy elsewhere.
+export type TrustlineStatus = "yes" | "no" | "unknown";
 
 export type TrustlinePort = {
-  hasUsdcTrustline(accountId: string): Promise<boolean>;
+  hasUsdcTrustline(accountId: string): Promise<TrustlineStatus>;
 };
 
 /** Human-readable alarm detail for a missing trustline (CL-R9, FC-R3-adjacent alarms). */

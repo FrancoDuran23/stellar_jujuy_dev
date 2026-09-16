@@ -308,7 +308,7 @@ test("GET /ready adds stage 2 detail (channel, monitor state) once the channel b
       channelService: fakeChannelService(async () => {
         throw new Error("unused");
       }),
-      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: true, lastKnownClosing: false, lastError: undefined, lastPolledAt: "2026-09-16T00:00:00.000Z" }) },
+      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: true, lastKnownClosing: false, lastError: undefined, lastPolledAt: "2026-09-16T00:00:00.000Z", lastKnownBalanceRaw: undefined }) },
     },
   });
   await withApp(
@@ -329,7 +329,7 @@ test("POST /channel/vouchers returns 200/accepted:true when the channel instance
     status: "ready",
     instance: {
       channelService: fakeChannelService(async (): Promise<VoucherAcceptOutcome> => ({ kind: "accepted", remainingRaw: 500n })),
-      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: false, lastKnownClosing: undefined, lastError: undefined, lastPolledAt: undefined }) },
+      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: false, lastKnownClosing: undefined, lastError: undefined, lastPolledAt: undefined, lastKnownBalanceRaw: undefined }) },
     },
   });
   await withApp(
@@ -382,4 +382,103 @@ test("POST /channel/vouchers is 404 when stage 2 is not wired at all (no channel
     const response = await fetch(`${baseUrl}/channel/vouchers`, { method: "POST" });
     assert.equal(response.status, 404);
   });
+});
+
+// --- review finding 6 (Lote F): /ready must fail when CHANNEL_CONTRACT is
+// configured and the channel instance is unavailable, or ready but its
+// close-monitor is not running — not just annotate a 200 with a side note.
+
+test("GET /ready is 503 when the primary boot is ready but the channel instance is not (stage 2 configured)", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeChargePort(async () => { throw new Error("unused"); }) });
+  const channelBoot = fakeChannelBoot({ status: "unavailable", reason: "config_invalid", detail: "boom" });
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/ready`);
+      assert.equal(response.status, 503);
+      const body = (await response.json()) as { status: string; channelStatus: string };
+      assert.equal(body.status, "unavailable");
+      assert.equal(body.channelStatus, "unavailable");
+    },
+    { channelBoot, channel: CHANNEL },
+  );
+});
+
+test("GET /ready is 503 when the channel instance is ready but its close-monitor is not running", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeChargePort(async () => { throw new Error("unused"); }) });
+  const channelBoot = fakeChannelBoot({
+    status: "ready",
+    instance: {
+      channelService: fakeChannelService(async () => { throw new Error("unused"); }),
+      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: false, lastKnownClosing: undefined, lastError: undefined, lastPolledAt: undefined, lastKnownBalanceRaw: undefined }) },
+    },
+  });
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/ready`);
+      assert.equal(response.status, 503);
+      const body = (await response.json()) as { status: string; reason: string };
+      assert.equal(body.reason, "close_monitor_not_running");
+    },
+    { channelBoot, channel: CHANNEL },
+  );
+});
+
+test("GET /ready is 200 when the channel instance is ready AND its close-monitor is running", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeChargePort(async () => { throw new Error("unused"); }) });
+  const channelBoot = fakeChannelBoot({
+    status: "ready",
+    instance: {
+      channelService: fakeChannelService(async () => { throw new Error("unused"); }),
+      closeMonitor: { start() {}, stop() {}, getState: () => ({ running: true, lastKnownClosing: false, lastError: undefined, lastPolledAt: "2026-09-16T00:00:00.000Z", lastKnownBalanceRaw: undefined }) },
+    },
+  });
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/ready`);
+      assert.equal(response.status, 200);
+    },
+    { channelBoot, channel: CHANNEL },
+  );
+});
+
+test("POST /channel/vouchers (re-arm path) starts the close-monitor once the channel instance becomes ready", async () => {
+  const boot = fakeBoot({ status: "ready", instance: fakeChargePort(async () => { throw new Error("unused"); }) });
+  let startCalls = 0;
+  const readyState: BuildResult<ServerChannelInstance> = {
+    status: "ready",
+    instance: {
+      channelService: fakeChannelService(async (): Promise<VoucherAcceptOutcome> => ({ kind: "accepted", remainingRaw: 1n })),
+      closeMonitor: { start: () => { startCalls += 1; }, stop() {}, getState: () => ({ running: false, lastKnownClosing: undefined, lastError: undefined, lastPolledAt: undefined, lastKnownBalanceRaw: undefined }) },
+    },
+  };
+  // Starts unavailable; ensureReady() (the re-arm path) is what brings it up.
+  const channelBoot: FailClosedBoot<ServerChannelInstance> = {
+    getState: () => ({ status: "unavailable", reason: "config_invalid", detail: "not ready yet" }),
+    ensureReady: async () => readyState,
+  };
+  await withApp(
+    boot,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/channel/vouchers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channel: CHANNEL,
+          network: "stellar:testnet",
+          cumulativeAmount: "1000",
+          signature: "a".repeat(128),
+          commitmentPubkey: "b".repeat(64),
+          sessionId: "sess_1",
+          cumulativeBytes: 1_048_576,
+          meterReadingId: "mr_1",
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(startCalls, 1, "the re-arm path must (idempotently) start the close-monitor");
+    },
+    { channelBoot, channel: CHANNEL },
+  );
 });

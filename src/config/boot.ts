@@ -566,16 +566,28 @@ export function createUsdcBalancePort(env: {
 }
 
 /** Real Horizon-backed `TrustlinePort` (CL-R9) — same recipe
- * `scripts/preflight.ts` already uses. */
-export function createHorizonTrustlinePort(horizonUrl: string): TrustlinePort {
+ * `scripts/preflight.ts` already uses. Tri-state (review finding 3, Lote F):
+ * a Horizon error (down, timeout, rate-limited, ...) reports `"unknown"`,
+ * never `"no"` — callers fail OPEN on a diagnosis failure instead of
+ * blocking a close exactly when a dispute needs it most. `usdcIssuer`, when
+ * given, also checks the trustline's issuer (`USDC_ISSUER`, optional —
+ * `config/env.ts`'s own doc comment on that field explains why it has no
+ * default); without it the check degrades to `asset_code === "USDC"` alone,
+ * same as before this fix. */
+export function createHorizonTrustlinePort(horizonUrl: string, usdcIssuer?: string): TrustlinePort {
   const horizon = new Horizon.Server(horizonUrl);
   return {
     async hasUsdcTrustline(accountId) {
       try {
         const account = await horizon.loadAccount(accountId);
-        return account.balances.some((balance) => "asset_code" in balance && balance.asset_code === "USDC");
+        const hasIt = account.balances.some((balance) => {
+          if (!("asset_code" in balance) || balance.asset_code !== "USDC") return false;
+          if (usdcIssuer === undefined) return true;
+          return "asset_issuer" in balance && balance.asset_issuer === usdcIssuer;
+        });
+        return hasIt ? "yes" : "no";
       } catch {
-        return false;
+        return "unknown";
       }
     },
   };
@@ -653,7 +665,7 @@ export async function buildServerChannelInstance(
     const statePort = createServerChannelStatePort(env);
     const verifyPort = createServerChannelVerifyPort(env, env.COMMITMENT_PUBKEY);
     const closePort = createServerChannelClosePort(env);
-    const trustlinePort = createHorizonTrustlinePort(HORIZON_URLS[env.STELLAR_NETWORK]);
+    const trustlinePort = createHorizonTrustlinePort(HORIZON_URLS[env.STELLAR_NETWORK], env.USDC_ISSUER);
     const usdcBalancePort = createUsdcBalancePort(env);
 
     const channelService = createChannelService({
@@ -664,6 +676,7 @@ export async function buildServerChannelInstance(
       trustlinePort,
       usdcBalancePort,
       funderAccount: env.FUNDER_ACCOUNT,
+      recipientAccount: env.STELLAR_RECIPIENT,
       closeAssertAttempts: env.CLOSE_ASSERT_ATTEMPTS,
       closeAssertIntervalMs: env.CLOSE_ASSERT_INTERVAL_MS,
       ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
@@ -674,8 +687,28 @@ export async function buildServerChannelInstance(
       statePort,
       watchPort: createWatchChannelPort(channel, env),
       pollIntervalMs: env.CHANNEL_POLL_INTERVAL_MS,
-      onClosingDetected: () => {
-        void channelService.closeChannel(channel);
+      // Review finding 1 (Lote F): `channelService.closeChannel` never
+      // rejects any more (every failure mode resolves to a typed
+      // `CloseOutcome`), but this wiring still never trusts that alone — a
+      // throw here is caught and WARNed instead of becoming an unhandled
+      // rejection that would kill the process exactly when a dispute was
+      // detected. `close-monitor.ts` only latches its own `triggered` state
+      // on `{closed:true}` (review finding 3).
+      onClosingDetected: async () => {
+        try {
+          const outcome = await channelService.closeChannel(channel);
+          return { closed: outcome.kind === "closed" };
+        } catch (error) {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              reason: "close_channel_attempt_failed",
+              channel,
+              detail: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          return { closed: false };
+        }
       },
       ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
     });

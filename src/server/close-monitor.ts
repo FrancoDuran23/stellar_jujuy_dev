@@ -21,33 +21,75 @@
 // this SDK version can throw `unknown SorobanCredentialsType member for
 // value 2` from unrelated ledger activity) — `getLastError()` surfaces the
 // most recent failure for `/ready` instead.
+//
+// Review finding 3 (Lote F): `triggered` used to latch BEFORE the close
+// outcome was known (a failed/blocked close attempt still permanently
+// suppressed every future one). It now latches only once `onClosingDetected`
+// itself reports a genuine `{closed:true}`, and a detected-but-not-yet-closed
+// dispute is retried with bounded backoff (`shared/retry.ts`) inside one
+// detection event, then retried again — unbounded across events — by the
+// next regular poll tick or watch event, since `triggered` stays false. This
+// matches CL-R11: a detected dispute is never permanently abandoned.
+//
+// Review finding 8 (Lote F): the old "balance > depositRaw" backup invariant
+// could never fire in practice, because `depositRaw` itself falls back to
+// `state.balance` whenever the contract's own `deposited()` getter is
+// unavailable (true for the only wasm revision deployable today) or no local
+// deposit record exists (the demo channel #2 was opened outside the CLI) —
+// so the two sides of that comparison were frequently identical by
+// construction. Replaced with a DROP-detection signal: a poll-to-poll
+// decrease in `balanceRaw` with no close of OUR OWN on record is treated as
+// a suspected refund/dispute (R3) and also drives the close path, not just
+// an alarm. KNOWN LIMITATION: this monitor instance cannot see a close
+// triggered out-of-band by `server/channel-admin.ts` (a separate process
+// invocation) — it would see the resulting drop and attempt its own
+// (harmless but noisy) redundant close. See docs/sdd/payments-mpp.md §6,
+// Lote F.
 
-import type { EmitInput } from "../shared/events.ts";
-import { emit as defaultEmit } from "../shared/events.ts";
+import { emit as defaultEmit, type EmitInput } from "../shared/events.ts";
+import { withRetry, type RetryOptions } from "../shared/retry.ts";
 import type { ChannelStatePort } from "./channel-service.ts";
 
 export type CloseWatchPort = {
   /** Starts watching; returns a stop() function. `onEvent` fires for any
    * `close`-topic event (pending dispute or already-effective close — see
-   * the spike's note that the topic alone cannot tell them apart, only
+   * the spike's own note that the topic alone cannot tell them apart, only
    * `effectiveAtLedger` can); `onError` must never throw. */
   watch(onEvent: () => void, onError: (error: unknown) => void): () => void;
 };
+
+/** Result of one close attempt (review finding 3, Lote F): `closed: true`
+ * only for `channelService.closeChannel`'s own `kind === "closed"` — every
+ * other outcome (`closed_unverified`, `nothing_to_close`, `blocked`,
+ * `failed`) is `closed: false` and therefore retryable. */
+export type CloseAttemptOutcome = { closed: boolean };
+
+export type CloseRetryOptions = Pick<RetryOptions, "maxAttempts" | "baseDelayMs" | "maxDelayMs" | "sleep">;
 
 export type CloseMonitorDeps = {
   channel: string;
   statePort: ChannelStatePort;
   /** Optional — the monitor still works (fallback poll only) without it. */
   watchPort?: CloseWatchPort;
-  /** Called at most once per monitor lifetime (dedup: a dispute is a single
-   * event to react to, not a per-poll-tick one) — `server/main.ts` wires
-   * this to `channelService.closeChannel(channel)`. */
-  onClosingDetected: () => void;
+  /**
+   * Attempts one close. May be called more than once per detected dispute
+   * (bounded backoff within one detection event, review finding 3) and
+   * again on a later poll tick/watch event if every attempt in that burst
+   * came back `{closed:false}` — a detected dispute is never abandoned
+   * (CL-R11). Must never throw in practice — `server/main.ts`'s real wiring
+   * already wraps `channelService.closeChannel` with its own try/catch +
+   * WARN (review finding 1) — but a throw here is treated the same as
+   * `{closed:false}` (retryable), never a monitor crash.
+   */
+  onClosingDetected: () => Promise<CloseAttemptOutcome>;
   /** @default 30000 (design 4.4's CHANNEL_POLL_INTERVAL_MS default) */
   pollIntervalMs?: number;
   emit?: (input: EmitInput) => void;
   setIntervalFn?: (fn: () => void, ms: number) => unknown;
   clearIntervalFn?: (handle: unknown) => void;
+  /** Bounded backoff for the retries inside one detection event (review
+   * finding 3). @default shared/retry.ts's own defaults, maxAttempts 4. */
+  closeRetry?: CloseRetryOptions;
 };
 
 export type CloseMonitorState = {
@@ -55,6 +97,9 @@ export type CloseMonitorState = {
   lastKnownClosing: boolean | undefined;
   lastError: string | undefined;
   lastPolledAt: string | undefined;
+  /** Last observed on-chain balance (review finding 8's drop-detection
+   * signal) — `undefined` until the first successful poll. */
+  lastKnownBalanceRaw: bigint | undefined;
 };
 
 export type CloseMonitor = {
@@ -68,6 +113,7 @@ function messageOf(error: unknown): string {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
+const DEFAULT_CLOSE_RETRY_ATTEMPTS = 4;
 
 export function createCloseMonitor(deps: CloseMonitorDeps): CloseMonitor {
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -76,20 +122,52 @@ export function createCloseMonitor(deps: CloseMonitorDeps): CloseMonitor {
   const clearIntervalFn = deps.clearIntervalFn ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
 
   let triggered = false;
+  let attemptInFlight = false;
   let stopWatch: (() => void) | undefined;
   let intervalHandle: unknown;
-  const state: CloseMonitorState = { running: false, lastKnownClosing: undefined, lastError: undefined, lastPolledAt: undefined };
+  const state: CloseMonitorState = {
+    running: false,
+    lastKnownClosing: undefined,
+    lastError: undefined,
+    lastPolledAt: undefined,
+    lastKnownBalanceRaw: undefined,
+  };
 
-  function triggerOnce(): void {
-    if (triggered) return;
-    triggered = true;
+  /**
+   * Runs a bounded-backoff burst of close attempts for the CURRENT
+   * detection event. Latches `triggered` only once one attempt resolves
+   * `{closed:true}` — every other outcome (including every attempt in the
+   * burst failing) leaves `triggered` false so the next poll tick or watch
+   * event tries again (review finding 3).
+   */
+  async function attemptClose(): Promise<void> {
+    if (triggered || attemptInFlight) return;
+    attemptInFlight = true;
     try {
-      deps.onClosingDetected();
+      await withRetry(
+        async () => {
+          const outcome = await deps.onClosingDetected();
+          if (!outcome.closed) {
+            throw new Error("close attempt did not close the channel yet");
+          }
+        },
+        {
+          maxAttempts: deps.closeRetry?.maxAttempts ?? DEFAULT_CLOSE_RETRY_ATTEMPTS,
+          ...(deps.closeRetry?.baseDelayMs !== undefined ? { baseDelayMs: deps.closeRetry.baseDelayMs } : {}),
+          ...(deps.closeRetry?.maxDelayMs !== undefined ? { maxDelayMs: deps.closeRetry.maxDelayMs } : {}),
+          ...(deps.closeRetry?.sleep !== undefined ? { sleep: deps.closeRetry.sleep } : {}),
+        },
+      );
+      triggered = true;
     } catch (error) {
       // The caller's own closeChannel() already reports its own failures via
-      // events; this catch exists only so a bug in that wiring can never
-      // crash the monitor itself (never-crash requirement).
+      // events; this catch exists so a bug in that wiring, or every attempt
+      // in this burst failing, can never crash the monitor itself
+      // (never-crash requirement) — and so `triggered` is deliberately left
+      // false, per the doc comment above.
       state.lastError = messageOf(error);
+    } finally {
+      attemptInFlight = false;
     }
   }
 
@@ -103,25 +181,30 @@ export function createCloseMonitor(deps: CloseMonitorDeps): CloseMonitor {
       }
       const closing = info.closeEffectiveAtLedger !== null;
       state.lastKnownClosing = closing;
-      if (closing) {
-        triggerOnce();
-        return;
-      }
-      // Backup invariant (design's balance <= deposited, adapted per the
-      // Facts override since `withdrawn` is unavailable): balance must
-      // never exceed the tracked deposit. A drop with no close on record
-      // would mean a refund raced ahead of us (R3) — surfaced as an alarm,
-      // not auto-recovered.
-      if (info.balanceRaw > info.depositRaw) {
+
+      // Drop-detection backup signal (review finding 8) — checked before the
+      // primary `closing` signal so an unexpected drop is never missed even
+      // if `closeEffectiveAtLedger` itself is not (yet) set (see the module
+      // doc comment: `close()` alone, with no prior `close_start`, also
+      // drops `balance` without ever setting `closeEffectiveAtLedger`).
+      const previousBalance = state.lastKnownBalanceRaw;
+      state.lastKnownBalanceRaw = info.balanceRaw;
+      if (previousBalance !== undefined && info.balanceRaw < previousBalance && !triggered) {
         emitEvent({
           type: "payment.failed",
           sessionId: null,
           data: {
-            reason: "channel_invariant_violated",
+            reason: "suspected_refund_or_dispute",
             channel: deps.channel,
-            detail: `balance ${info.balanceRaw} exceeds deposit ${info.depositRaw}`,
+            detail: `balance dropped from ${previousBalance} to ${info.balanceRaw} with no close of ours on record`,
           },
         });
+        void attemptClose();
+        return;
+      }
+
+      if (closing) {
+        void attemptClose();
       }
     } catch (error) {
       state.lastError = messageOf(error);
@@ -135,7 +218,7 @@ export function createCloseMonitor(deps: CloseMonitorDeps): CloseMonitor {
     if (deps.watchPort) {
       try {
         stopWatch = deps.watchPort.watch(
-          () => triggerOnce(),
+          () => void attemptClose(),
           (error) => {
             state.lastError = messageOf(error);
           },

@@ -120,6 +120,18 @@ const serverSchema = sharedSchema.extend({
       .refine(isStellarAccountId, "must be a 56-char account id starting with G")
       .optional(),
   ),
+  // Optional (review finding 3, Lote F): the classic-asset issuer backing
+  // USDC_SAC_CONTRACT, so the pre-close trustline check can verify the
+  // issuer too, not just `asset_code === "USDC"` (a same-named lookalike
+  // trustline would otherwise pass). KNOWN LIMITATION documented in
+  // docs/sdd/payments-mpp.md §6, Lote F: `USDC_SAC_CONTRACT` is a Soroban
+  // contract id and there is no getter/RPC call this codebase uses that
+  // reverses it to its classic issuer account, so this is left unset (and
+  // the check degrades to asset_code-only, same as before) unless an
+  // operator configures it explicitly.
+  USDC_ISSUER: emptyToUndefined(
+    z.string().refine(isStellarAccountId, "must be a 56-char account id starting with G").optional(),
+  ),
   SETTLE_THRESHOLD_BPS: z.coerce.number().int().min(1).max(10000).default(5000),
   CHANNEL_POLL_INTERVAL_MS: z.coerce.number().int().min(5000).default(30000),
   CLOSE_MONITOR_LOOKBACK_LEDGERS: z.coerce.number().int().min(1).default(120),

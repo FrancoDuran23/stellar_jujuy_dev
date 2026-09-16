@@ -25,6 +25,7 @@ import type { EmitInput } from "../shared/events.ts";
 
 const CHANNEL = `C${"A".repeat(55)}`;
 const FUNDER = "G".padEnd(56, "F");
+const RECIPIENT = "G".padEnd(56, "R");
 
 function openStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "channel-service-test-"));
@@ -50,7 +51,7 @@ function makeDeps(overrides: Partial<ChannelServiceDeps> = {}): ChannelServiceDe
   const alwaysValidVerify: ChannelVerifyPort = { async verifyCommitment() { return true; } };
   const foundOpenState: ChannelStatePort = { async getChannelInfo() { return openInfo(); } };
   const fakeClose: ChannelClosePort = { async close() { return { txHash: "close-hash" }; } };
-  const trustlineOk: TrustlinePort = { async hasUsdcTrustline() { return true; } };
+  const trustlineOk: TrustlinePort = { async hasUsdcTrustline() { return "yes"; } };
   const balancePort: UsdcBalancePort = { async getUsdcBalanceRaw() { return 0n; } };
 
   return {
@@ -61,6 +62,7 @@ function makeDeps(overrides: Partial<ChannelServiceDeps> = {}): ChannelServiceDe
     trustlinePort: overrides.trustlinePort ?? trustlineOk,
     usdcBalancePort: overrides.usdcBalancePort ?? balancePort,
     funderAccount: overrides.funderAccount ?? FUNDER,
+    recipientAccount: overrides.recipientAccount ?? RECIPIENT,
     emit: overrides.emit ?? ((input) => events.push(input)),
     closeAssertAttempts: overrides.closeAssertAttempts ?? 3,
     closeAssertIntervalMs: overrides.closeAssertIntervalMs ?? 0,
@@ -143,7 +145,7 @@ test("verifyAndAccept: a replayed/lower amount is stale_reading, not re-verified
 test("closeChannel: blocked (never calls close()) when the funder has no USDC trustline", async () => {
   let closeCalls = 0;
   const deps = makeDeps({
-    trustlinePort: { async hasUsdcTrustline() { return false; } },
+    trustlinePort: { async hasUsdcTrustline() { return "no"; } },
     closePort: { async close() { closeCalls += 1; return { txHash: "should-not-happen" }; } },
   });
   const service = createChannelService(deps);
@@ -153,17 +155,41 @@ test("closeChannel: blocked (never calls close()) when the funder has no USDC tr
   assert.ok(deps.events.some((e) => e.type === "payment.failed" && (e.data as { reason?: string }).reason === "funder_trustline_missing"));
 });
 
-test("closeChannel: success when the post-close balance delta matches the expected refund", async () => {
+test("closeChannel: an unknown trustline status (Horizon error) proceeds with the close instead of blocking it (review finding 3)", async () => {
+  const deps = makeDeps({
+    trustlinePort: { async hasUsdcTrustline() { return "unknown"; } },
+  });
+  await deps.store.accept(
+    {
+      channel: CHANNEL,
+      network: "stellar:testnet",
+      cumulativeAmountRaw: 125_000n,
+      signature: "a".repeat(128),
+      commitmentPubkey: "b".repeat(64),
+      sessionId: "sess_1",
+      cumulativeBytes: 1_048_576,
+      meterReadingId: "mr_1",
+    },
+    1_000_000n,
+  );
+  const service = createChannelService(deps);
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.notEqual(outcome.kind, "blocked");
+});
+
+test("closeChannel: success when the post-close funder AND recipient balance deltas both meet their thresholds", async () => {
   const deps = makeDeps();
   const service = createChannelService(deps);
   await service.verifyAndAccept(voucherInput({ cumulativeAmountRaw: 125_000n }));
 
-  let balance = 0n;
+  let settled = false;
+  deps.closePort = { async close() { settled = true; return { txHash: "close-hash" }; } };
   deps.usdcBalancePort = {
-    async getUsdcBalanceRaw() {
-      const value = balance;
-      balance = 875_000n; // funder receives the remainder (1_000_000 deposit - 125_000 settled)
-      return value;
+    async getUsdcBalanceRaw(accountId) {
+      if (!settled) return 0n;
+      if (accountId === FUNDER) return 875_000n; // funder receives the remainder (1_000_000 on-chain balance - 125_000 settled)
+      if (accountId === RECIPIENT) return 125_000n; // recipient receives the settled amount
+      return 0n;
     },
   };
   const outcome = await service.closeChannel(CHANNEL);
@@ -175,7 +201,28 @@ test("closeChannel: success when the post-close balance delta matches the expect
   assert.ok(deps.events.some((e) => e.type === "channel.closed"));
 });
 
-test("closeChannel: refund_not_received when the balance never matches after all attempts", async () => {
+test("closeChannel: an unrelated USDC deposit into the funder's account (delta > expected) still counts as closed (review finding 7: >=, not ===)", async () => {
+  const deps = makeDeps();
+  const service = createChannelService(deps);
+  await service.verifyAndAccept(voucherInput({ cumulativeAmountRaw: 125_000n }));
+
+  let settled = false;
+  deps.closePort = { async close() { settled = true; return { txHash: "close-hash" }; } };
+  deps.usdcBalancePort = {
+    async getUsdcBalanceRaw(accountId) {
+      if (!settled) return 0n;
+      // Funder receives the expected refund PLUS an unrelated 50 raw units
+      // from somewhere else entirely — must not fail the assertion.
+      if (accountId === FUNDER) return 875_050n;
+      if (accountId === RECIPIENT) return 125_000n;
+      return 0n;
+    },
+  };
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.equal(outcome.kind, "closed");
+});
+
+test("closeChannel: refund_not_received when neither balance ever meets its threshold after all attempts", async () => {
   const deps = makeDeps({ closeAssertAttempts: 2 });
   const service = createChannelService(deps);
   await service.verifyAndAccept(voucherInput({ cumulativeAmountRaw: 125_000n }));
@@ -185,6 +232,66 @@ test("closeChannel: refund_not_received when the balance never matches after all
   if (outcome.kind !== "failed") return;
   assert.equal(outcome.reason, "refund_not_received");
   assert.ok(deps.events.some((e) => e.type === "payment.failed" && (e.data as { reason?: string }).reason === "refund_not_received"));
+});
+
+test("closeChannel: a throwing usdcBalancePort for balanceBefore never rejects — still attempts the close and comes back closed_unverified", async () => {
+  const deps = makeDeps({ closeAssertAttempts: 1 });
+  const service = createChannelService(deps);
+  await service.verifyAndAccept(voucherInput({ cumulativeAmountRaw: 125_000n }));
+  deps.usdcBalancePort = {
+    async getUsdcBalanceRaw() {
+      throw new Error("simulated Soroban simulation failure (getSep41BalanceRaw)");
+    },
+  };
+  let closeCalled = false;
+  deps.closePort = {
+    async close() {
+      closeCalled = true;
+      return { txHash: "close-hash" };
+    },
+  };
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.equal(closeCalled, true, "a throwing balance port must never prevent close() from being attempted");
+  assert.equal(outcome.kind, "closed_unverified");
+});
+
+test("closeChannel: a throwing usdcBalancePort for every post-close read comes back closed_unverified, never rejects", async () => {
+  const deps = makeDeps({ closeAssertAttempts: 2 });
+  const service = createChannelService(deps);
+  await service.verifyAndAccept(voucherInput({ cumulativeAmountRaw: 125_000n }));
+  let calls = 0;
+  deps.usdcBalancePort = {
+    async getUsdcBalanceRaw() {
+      calls += 1;
+      if (calls === 1) return 0n; // balanceBefore succeeds once
+      throw new Error("Soroban RPC down for every post-close read");
+    },
+  };
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.equal(outcome.kind, "closed_unverified");
+});
+
+test("closeChannel: nothing_to_close when no voucher was ever accepted — close() is never called with a placeholder signature", async () => {
+  let closeCalls = 0;
+  const deps = makeDeps({
+    closePort: { async close() { closeCalls += 1; return { txHash: "should-not-happen" }; } },
+  });
+  const service = createChannelService(deps);
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.equal(outcome.kind, "nothing_to_close");
+  assert.equal(closeCalls, 0);
+  assert.ok(deps.events.some((e) => e.type === "channel.close_skipped"));
+});
+
+test("closeChannel: a throwing statePort never rejects and is reported as upstream_unavailable", async () => {
+  const deps = makeDeps({
+    statePort: { async getChannelInfo() { throw new Error("Soroban RPC transport failure"); } },
+  });
+  const service = createChannelService(deps);
+  const outcome = await service.closeChannel(CHANNEL);
+  assert.equal(outcome.kind, "failed");
+  if (outcome.kind !== "failed") return;
+  assert.equal(outcome.reason, "upstream_unavailable");
 });
 
 test("closeChannel: a throwing closePort maps to close_error and never touches the balance-assert loop", async () => {
@@ -199,10 +306,12 @@ test("closeChannel: a throwing closePort maps to close_error and never touches t
     },
   });
   const service = createChannelService(deps);
+  await service.verifyAndAccept(voucherInput({ cumulativeAmountRaw: 125_000n }));
+  balanceReads = 0;
   const outcome = await service.closeChannel(CHANNEL);
   assert.equal(outcome.kind, "failed");
   if (outcome.kind !== "failed") return;
   assert.equal(outcome.reason, "close_error");
-  // Exactly one read (balanceBefore) — the assert loop never ran.
-  assert.equal(balanceReads, 1);
+  // Exactly two reads (funder + recipient balanceBefore) — the assert loop never ran.
+  assert.equal(balanceReads, 2);
 });

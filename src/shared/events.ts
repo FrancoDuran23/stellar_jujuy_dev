@@ -15,6 +15,7 @@ export const EVENT_TYPES = [
   "usage.voucher_signed",
   "channel.exhausted",
   "channel.closed",
+  "channel.close_skipped",
   "payment.failed",
 ] as const;
 

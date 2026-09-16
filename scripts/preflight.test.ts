@@ -9,7 +9,7 @@ const FUNDER = "G".padEnd(56, "B");
 function fakeTrustlinePort(missing: readonly string[]): TrustlinePort {
   return {
     async hasUsdcTrustline(accountId) {
-      return !missing.includes(accountId);
+      return missing.includes(accountId) ? "no" : "yes";
     },
   };
 }
@@ -43,6 +43,14 @@ test("runPreflight warns for every account missing the trustline, never throws",
   ];
   const result = await runPreflight(fakeTrustlinePort([RECIPIENT, FUNDER]), accounts);
   assert.equal(result.warnings.length, 2);
+});
+
+test("runPreflight warns (does not throw or block) when the trustline lookup itself fails (status: unknown)", async () => {
+  const accounts: PreflightAccount[] = [{ role: "recipient", accountId: RECIPIENT }];
+  const trustlinePort: TrustlinePort = { async hasUsdcTrustline() { return "unknown"; } };
+  const result = await runPreflight(trustlinePort, accounts);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0]!.detail, /could not verify/);
 });
 
 test("printPreflightResult logs one warn line per warning and an info line when there are none", () => {
