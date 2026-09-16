@@ -36,7 +36,7 @@ import {
   type Message2,
 } from "../../shared/messages.ts";
 import type { Reason } from "../../shared/reasons.ts";
-import { TimeoutError, withTimeout } from "../../shared/retry.ts";
+import { TimeoutError, UpstreamRpcError, withTimeout } from "../../shared/retry.ts";
 import type { VoucherLog, VoucherIndexEntry, VoucherRecord } from "../../persistence/voucher-log.ts";
 import { createChannelMutex } from "../mutex.ts";
 import { checkGuardrails } from "../guardrails.ts";
@@ -307,7 +307,14 @@ export function createVoucherService(deps: VoucherServiceDeps): VoucherService {
           "depositPort.getChannelInfo",
         );
       } catch (error) {
-        const reason: Reason = error instanceof TimeoutError ? "upstream_unavailable" : "internal_error";
+        // Review finding 5, Lote F: `UpstreamRpcError` (config/boot.ts's
+        // real `ChannelRpcPort`) marks a genuine Soroban RPC transport
+        // failure — distinct from the port's own routine `{status:
+        // "not_found"}` for a channel that genuinely does not exist. Mapped
+        // to the same retryable `upstream_unavailable` reason a timeout
+        // already gets, never the permanent `internal_error`.
+        const reason: Reason =
+          error instanceof TimeoutError || error instanceof UpstreamRpcError ? "upstream_unavailable" : "internal_error";
         const detail = messageOf(error);
         for (const entry of batch) resolveFailure(entry, reason, detail);
         return;

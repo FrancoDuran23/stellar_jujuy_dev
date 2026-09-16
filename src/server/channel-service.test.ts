@@ -97,6 +97,24 @@ test("verifyAndAccept: accepts a valid, advancing, in-budget commitment and pers
   assert.equal(service.getHighestRaw(CHANNEL), 1000n);
 });
 
+test("verifyAndAccept: a crash-then-retry redelivery of the same voucher is accepted again as reused, and emits usage.voucher_signed only once (review finding 4, Lote F)", async () => {
+  const deps = makeDeps();
+  const service = createChannelService(deps);
+  const voucher = voucherInput({ cumulativeAmountRaw: 1000n, signatureHex: "a".repeat(128) });
+
+  const first = await service.verifyAndAccept(voucher);
+  assert.deepEqual(first, { kind: "accepted", remainingRaw: 999_000n });
+
+  // Simulates: the server accepted the voucher, then the process crashed
+  // before the agent's own delivering signer received the 200 — the agent
+  // retries the exact same internal POST /channel/vouchers body on restart.
+  const retry = await service.verifyAndAccept(voucher);
+  assert.deepEqual(retry, { kind: "accepted", remainingRaw: 999_000n, reused: true });
+
+  const signedEvents = deps.events.filter((e) => e.type === "usage.voucher_signed");
+  assert.equal(signedEvents.length, 1, "a reused accept must never re-emit usage.voucher_signed");
+});
+
 test("verifyAndAccept: rejects an invalid signature without touching the store", async () => {
   const deps = makeDeps({ verifyPort: { async verifyCommitment() { return false; } } });
   const service = createChannelService(deps);

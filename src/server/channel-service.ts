@@ -80,7 +80,14 @@ export type VoucherRejectReason =
   | "channel_mismatch";
 
 export type VoucherAcceptOutcome =
-  | { kind: "accepted"; remainingRaw: bigint }
+  | {
+      kind: "accepted";
+      remainingRaw: bigint;
+      /** Review finding 4, Lote F: set when this call re-delivered the
+       * exact same, already-accepted amount+signature — see
+       * `ChannelVoucherStore.accept`'s own `reused` doc comment. */
+      reused?: boolean;
+    }
   | { kind: "rejected"; reason: VoucherRejectReason; detail: string };
 
 export type CloseOutcome =
@@ -226,12 +233,18 @@ export function createChannelService(deps: ChannelServiceDeps): ChannelService {
       };
     }
 
-    emitEvent({
-      type: "usage.voucher_signed",
-      sessionId: input.sessionId,
-      data: { channel: input.channel, cumulativeAmount: input.cumulativeAmountRaw.toString(), meterReadingId: input.meterReadingId },
-    });
-    return { kind: "accepted", remainingRaw: result.remainingRaw };
+    if (!result.reused) {
+      // Review finding 4, Lote F: a `reused` accept (the exact same
+      // amount+signature re-delivered after a crash-then-retry) records no
+      // new line — emitting this event again for it would double-count the
+      // same usage.
+      emitEvent({
+        type: "usage.voucher_signed",
+        sessionId: input.sessionId,
+        data: { channel: input.channel, cumulativeAmount: input.cumulativeAmountRaw.toString(), meterReadingId: input.meterReadingId },
+      });
+    }
+    return { kind: "accepted", remainingRaw: result.remainingRaw, ...(result.reused ? { reused: true } : {}) };
   }
 
   /** Never throws — a balance read failure is a data point ("unknown"), not

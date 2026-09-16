@@ -16,6 +16,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { VoucherLog, type VoucherRecord } from "../../persistence/voucher-log.ts";
+import { UpstreamRpcError } from "../../shared/retry.ts";
 import { createFakeSigner, type SignerPort } from "../signer.ts";
 import {
   createStaticDepositPort,
@@ -236,6 +237,36 @@ test("an unknown channel maps to channel_not_found", async () => {
   if (outcome.body.status !== "unsigned") return;
   assert.equal(outcome.body.reason, "channel_not_found");
   assert.equal(outcome.body.retryable, false);
+});
+
+test("a depositPort transport failure (UpstreamRpcError) maps to upstream_unavailable, retryable:true — never the permanent channel_not_found (review finding 5, Lote F)", async () => {
+  const failingDepositPort: ChannelDepositPort = {
+    async getChannelInfo() {
+      throw new UpstreamRpcError("channel state RPC call failed: fetch failed");
+    },
+  };
+  const service = makeService({ depositPort: failingDepositPort });
+  const outcome = await service.handle(m1());
+  assert.equal(outcome.status, 503);
+  assert.equal(outcome.body.status, "unsigned");
+  if (outcome.body.status !== "unsigned") return;
+  assert.equal(outcome.body.reason, "upstream_unavailable");
+  assert.equal(outcome.body.retryable, true);
+});
+
+test("a depositPort's plain/unexpected error (not UpstreamRpcError) still maps to internal_error, retryable:true", async () => {
+  const failingDepositPort: ChannelDepositPort = {
+    async getChannelInfo() {
+      throw new Error("something else entirely");
+    },
+  };
+  const service = makeService({ depositPort: failingDepositPort });
+  const outcome = await service.handle(m1());
+  assert.equal(outcome.status, 503);
+  assert.equal(outcome.body.status, "unsigned");
+  if (outcome.body.status !== "unsigned") return;
+  assert.equal(outcome.body.reason, "internal_error");
+  assert.equal(outcome.body.retryable, true);
 });
 
 test("an unexpected signer failure maps to internal_error, retryable:true (never an uncaught rejection)", async () => {

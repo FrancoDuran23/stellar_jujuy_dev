@@ -16,7 +16,7 @@
 import path from "node:path";
 import { Keypair, rpc as StellarRpc } from "@stellar/stellar-sdk";
 import { Mppx, Store, stellar } from "@stellar/mpp/charge/server";
-import { fromBaseUnits } from "@stellar/mpp";
+import { fromBaseUnits, StellarMppError } from "@stellar/mpp";
 import { Receipt } from "mppx";
 import type { ChargeOutcome, ChargePort } from "../server/charge-service.ts";
 import { parseServerEnv, parseAgentEnv, type ServerEnv, type AgentEnv } from "./env.ts";
@@ -44,6 +44,7 @@ import { close as closeChannelOnChain, getChannelState, watchChannel } from "@st
 import { Horizon } from "@stellar/stellar-sdk";
 import { getSep41BalanceRaw } from "../shared/stellar/channel-contract.ts";
 import type { TrustlinePort } from "../shared/stellar/trustline.ts";
+import { UpstreamRpcError } from "../shared/retry.ts";
 import {
   createChannelService,
   type ChannelChainInfo,
@@ -173,6 +174,31 @@ export function createSorobanRpcHealthPort(rpcUrl: string, timeoutMs: number): R
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Review finding 5, Lote F: distinguishes a definitive "this channel does
+ * not exist on-chain" outcome from a genuine RPC transport failure (DNS,
+ * connection refused, a malformed response, an RPC-level timeout) — the two
+ * used to be indistinguishable (`createStellarChannelRpcPort`/
+ * `createServerChannelStatePort` caught everything into `{found: false}`),
+ * which let a temporary Soroban RPC hiccup surface as the permanent,
+ * non-retryable `channel_not_found` (`shared/reasons.ts`: `retryable:
+ * false`) instead of the retryable `upstream_unavailable` — cutting the
+ * gateway off for good over what should have been a transient 503.
+ *
+ * `getChannelState()` (`@stellar/mpp/channel/server`) throws
+ * `StellarMppError` ONLY when a getter's simulation actually completed and
+ * failed (e.g. no deployed contract instance at this address — see
+ * `node_modules/@stellar/mpp/dist/channel/server/State.js`'s own
+ * `simulateGetter`, which names the failing getter and channel in the
+ * message). Any other exception (a plain `Error`/`TypeError` from a failed
+ * `fetch`, or the SDK's own internal timeout) is a transport failure.
+ * Exported for direct unit testing — actually forcing a live RPC transport
+ * failure would require network access, out of scope for a unit test.
+ */
+export function isChannelNotFoundOnChain(error: unknown): boolean {
+  return error instanceof StellarMppError;
 }
 
 /**
@@ -409,6 +435,13 @@ export function createServerDeliveringSigner(
  * (`closeEffectiveAtLedger !== null`), which already knows how to read the
  * contract's `CloseEffectiveAtLedger` instance-storage entry directly (no
  * getter exists for it — spike Part B).
+ *
+ * Review finding 5, Lote F: a definitive "channel not found" (
+ * `isChannelNotFoundOnChain`) still reports `{found: false}` — but a
+ * transport failure is rethrown as `UpstreamRpcError` instead of being
+ * swallowed the same way, so `agent/routes/vouchers.ts`'s `processBatch`
+ * maps it to the retryable `upstream_unavailable` M2 reason rather than the
+ * permanent `channel_not_found`.
  */
 export function createStellarChannelRpcPort(env: {
   SOROBAN_RPC_URL: string;
@@ -431,8 +464,11 @@ export function createStellarChannelRpcPort(env: {
           depositRaw = record !== undefined && record.channel === channel ? BigInt(record.depositRaw) : state.balance;
         }
         return { found: true, depositRaw, closing };
-      } catch {
-        return { found: false };
+      } catch (error) {
+        if (isChannelNotFoundOnChain(error)) {
+          return { found: false };
+        }
+        throw new UpstreamRpcError(`channel state RPC call failed: ${messageOf(error)}`);
       }
     },
   };
@@ -481,9 +517,15 @@ export function createServerBoot(options?: {
 /** Real `ChannelStatePort` (`server/channel-service.ts`, `server/
  * close-monitor.ts`): the richer sibling of `createStellarChannelRpcPort`
  * above (adds `balanceRaw`/`currentLedger`, needed for the close-monitor's
- * backup invariant and the close flow's refund math). Never throws — an RPC
- * failure reports `{found: false}` (spike's XDR-crash finding: every
- * request-serving RPC call must degrade, never crash). */
+ * backup invariant and the close flow's refund math). A definitive "channel
+ * not found" reports `{found: false}` (spike's XDR-crash finding: every
+ * request-serving RPC call must degrade, never crash) — but review finding
+ * 5, Lote F: a transport failure is rethrown as `UpstreamRpcError` instead,
+ * so `channel-service.ts`'s own catch (already unconditional) reports it as
+ * `upstream_unavailable` rather than the permanent `channel_not_found`.
+ * `close-monitor.ts`'s `pollOnce()` already tolerates a throwing statePort
+ * (its own top-level try/catch just records `lastError`), so this never
+ * risks crashing the monitor. */
 export function createServerChannelStatePort(env: {
   SOROBAN_RPC_URL: string;
   STELLAR_NETWORK: ChannelContractDeps["network"];
@@ -510,8 +552,11 @@ export function createServerChannelStatePort(env: {
           to: state.to,
           token: state.token,
         };
-      } catch {
-        return { found: false };
+      } catch (error) {
+        if (isChannelNotFoundOnChain(error)) {
+          return { found: false };
+        }
+        throw new UpstreamRpcError(`channel state RPC call failed: ${messageOf(error)}`);
       }
     },
   };

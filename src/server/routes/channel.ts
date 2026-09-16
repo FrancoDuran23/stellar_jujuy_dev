@@ -63,7 +63,15 @@ export function createChannelVouchersRoute(deps: CreateChannelRouteDeps): Reques
       meterReadingId: parsed.data.meterReadingId,
     });
     if (outcome.kind === "accepted") {
-      res.status(200).json({ accepted: true, remaining: outcome.remainingRaw.toString() });
+      res.status(200).json({
+        accepted: true,
+        remaining: outcome.remainingRaw.toString(),
+        // Review finding 4, Lote F: signals a crash-then-retry replay to
+        // `config/boot.ts`'s `createServerDeliveringSigner` (and to logs) —
+        // `accepted` alone is already enough for it to treat this as
+        // success, this is purely informational.
+        ...(outcome.reused ? { reused: true } : {}),
+      });
       return;
     }
     res.status(200).json({ accepted: false, reason: outcome.reason, detail: outcome.detail });

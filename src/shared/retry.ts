@@ -83,6 +83,24 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
+/** Thrown by a port (`config/boot.ts`'s real Soroban RPC ports) for a
+ * genuine transport-level failure — DNS, connection refused, a malformed
+ * RPC response, anything that is NOT a definitive "this channel does not
+ * exist" simulation result (review finding 5, Lote F). Distinct from a
+ * plain `Error` so `agent/routes/vouchers.ts` (and any other caller) can
+ * map it to the retryable `upstream_unavailable` M2 reason instead of the
+ * generic `internal_error`, exactly like `TimeoutError` below already does
+ * for a hung call — a swallowed transport failure used to surface as
+ * `{found: false}` and get misclassified as a permanent, non-retryable
+ * `channel_not_found`, cutting the gateway off over a temporary RPC
+ * hiccup. */
+export class UpstreamRpcError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "UpstreamRpcError";
+  }
+}
+
 /** Thrown by `withTimeout` (and, through it, `withRetry`'s `attemptTimeoutMs`)
  * when `fn` does not settle within `timeoutMs`. A distinct class — never a
  * plain `Error` — so a caller can tell "this specific call hung" apart from

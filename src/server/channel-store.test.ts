@@ -46,15 +46,49 @@ test("accept() accepts a strictly higher amount and reports the correct remainin
   assert.equal(store.getHighestRaw(CHANNEL), 1000n);
 });
 
-test("accept() rejects an equal or lower amount as stale", async () => {
+test("accept() rejects a strictly lower amount as stale", async () => {
   const store = createChannelVoucherStore(openLog());
   await store.accept(input({ cumulativeAmountRaw: 1000n }), 5000n);
 
-  const equal = await store.accept(input({ cumulativeAmountRaw: 1000n }), 5000n);
-  assert.deepEqual(equal, { accepted: false, reason: "stale", highestRaw: 1000n });
-
   const lower = await store.accept(input({ cumulativeAmountRaw: 500n }), 5000n);
   assert.deepEqual(lower, { accepted: false, reason: "stale", highestRaw: 1000n });
+});
+
+// --- review finding 4, Lote F: an equal amount with a matching signature is
+// a retry of the same accept, not a new one — accepted again, no new line.
+
+test("accept() with the same amount AND signature as the current highest is accepted again as reused, with no new line (review finding 4, Lote F)", async () => {
+  const store = createChannelVoucherStore(openLog());
+  const first = await store.accept(input({ cumulativeAmountRaw: 1000n, signature: "a".repeat(128) }), 5000n);
+  assert.deepEqual(first, { accepted: true, remainingRaw: 4000n });
+
+  const retry = await store.accept(input({ cumulativeAmountRaw: 1000n, signature: "a".repeat(128) }), 5000n);
+  assert.deepEqual(retry, { accepted: true, remainingRaw: 4000n, reused: true });
+  assert.equal(store.getHighestRaw(CHANNEL), 1000n);
+});
+
+test("accept() with the same amount but a DIFFERENT signature is still stale, never accepted as reused", async () => {
+  const store = createChannelVoucherStore(openLog());
+  await store.accept(input({ cumulativeAmountRaw: 1000n, signature: "a".repeat(128) }), 5000n);
+
+  const differentSignature = await store.accept(input({ cumulativeAmountRaw: 1000n, signature: "b".repeat(128) }), 5000n);
+  assert.deepEqual(differentSignature, { accepted: false, reason: "stale", highestRaw: 1000n });
+});
+
+test("accept() crash-then-retry: the internal hop can be redelivered any number of times after the equal-amount accept, always as reused (review finding 4, Lote F)", async () => {
+  const store = createChannelVoucherStore(openLog());
+  const voucher = input({ cumulativeAmountRaw: 1000n, signature: "a".repeat(128) });
+
+  // Simulates: server accepts, then a crash happens before the agent's own
+  // append — the agent retries the exact same delivery on restart, possibly
+  // more than once (e.g. the retry itself also hits a hiccup).
+  await store.accept(voucher, 5000n);
+  const retry1 = await store.accept(voucher, 5000n);
+  const retry2 = await store.accept(voucher, 5000n);
+  assert.equal(retry1.accepted, true);
+  assert.equal(retry2.accepted, true);
+  if (retry1.accepted) assert.equal(retry1.reused, true);
+  if (retry2.accepted) assert.equal(retry2.reused, true);
 });
 
 test("append (with fsync) happens before accept() resolves", async () => {

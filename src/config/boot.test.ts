@@ -12,6 +12,7 @@ import {
   createServerBoot,
   createServerChannelBoot,
   createServerDeliveringSigner,
+  isChannelNotFoundOnChain,
   toM2Reason,
   type BuildResult,
   type UnavailableReason,
@@ -19,6 +20,8 @@ import {
 import type { ChargePort } from "../server/charge-service.ts";
 import { parseAgentEnv, parseServerEnv } from "./env.ts";
 import type { SignerPort } from "../agent/signer.ts";
+import { StellarMppError } from "@stellar/mpp";
+import { UpstreamRpcError } from "../shared/retry.ts";
 
 const fakeChargePort: ChargePort = {
   async handle() {
@@ -550,6 +553,23 @@ test("createServerDeliveringSigner: POSTs to /channel/vouchers and returns the i
   assert.equal((capturedBody as { signature: string }).signature, "a".repeat(128));
 });
 
+test("createServerDeliveringSigner: a reused:true acceptance (crash-then-retry replay) is treated as success, never thrown (review finding 4, Lote F)", async () => {
+  const signer = createServerDeliveringSigner(fakeInnerSigner(), {
+    paymentServerUrl: "http://127.0.0.1:8080",
+    fetchImpl: (async () =>
+      new Response(JSON.stringify({ accepted: true, remaining: "999000", reused: true }), { status: 200 })) as typeof fetch,
+  });
+  const result = await signer.sign({
+    channel: `C${"A".repeat(55)}`,
+    network: "stellar:testnet",
+    cumulativeAmount: "1000",
+    sessionId: "sess_1",
+    cumulativeBytes: 1_048_576,
+    meterReadingId: "mr_1",
+  });
+  assert.equal(result.signature, "a".repeat(128));
+});
+
 test("createServerDeliveringSigner: throws when the server rejects the voucher (accepted:false)", async () => {
   const fetchImpl = (async () =>
     new Response(JSON.stringify({ accepted: false, reason: "channel_closing", detail: "close_start seen" }), {
@@ -589,4 +609,17 @@ test("createServerDeliveringSigner: throws on a non-2xx HTTP response", async ()
       meterReadingId: "mr_1",
     }),
   );
+});
+
+// --- isChannelNotFoundOnChain (review finding 5, Lote F) ---
+
+test("isChannelNotFoundOnChain: true only for StellarMppError (getChannelState's own definitive simulation failure)", () => {
+  assert.equal(isChannelNotFoundOnChain(new StellarMppError("Failed to simulate balance on channel CABC...: HostError")), true);
+});
+
+test("isChannelNotFoundOnChain: false for a plain transport-style error (DNS/connection/timeout) — never mistaken for not-found", () => {
+  assert.equal(isChannelNotFoundOnChain(new Error("fetch failed")), false);
+  assert.equal(isChannelNotFoundOnChain(new TypeError("ECONNREFUSED")), false);
+  assert.equal(isChannelNotFoundOnChain(new UpstreamRpcError("channel state RPC call failed: fetch failed")), false);
+  assert.equal(isChannelNotFoundOnChain("not even an Error instance"), false);
 });

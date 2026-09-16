@@ -36,7 +36,17 @@ export type AcceptCommitmentInput = {
 };
 
 export type AcceptCommitmentResult =
-  | { accepted: true; remainingRaw: bigint }
+  | {
+      accepted: true;
+      remainingRaw: bigint;
+      /** Review finding 4, Lote F: the exact same cumulative amount AND
+       * signature as the current highest was re-delivered (the internal
+       * agent -> server hop retried after a crash between the server's
+       * accept and the agent's own log append) — accepted again, but no new
+       * line was written. `channel-service.ts` skips the `usage.
+       * voucher_signed` event for this case (nothing new happened). */
+      reused?: boolean;
+    }
   | { accepted: false; reason: "stale"; highestRaw: bigint };
 
 export type ChannelVoucherStore = {
@@ -82,7 +92,17 @@ export function createChannelVoucherStore(
       return mutex.withChannelLock(input.channel, async () => {
         const previous = voucherLog.getHighest(input.channel);
         const previousRaw = previous?.cumulativeAmountRaw ?? 0n;
-        if (input.cumulativeAmountRaw <= previousRaw) {
+        if (input.cumulativeAmountRaw < previousRaw) {
+          return { accepted: false, reason: "stale", highestRaw: previousRaw };
+        }
+        if (input.cumulativeAmountRaw === previousRaw) {
+          // Review finding 4, Lote F: an equal cumulative amount is only
+          // ever legitimate as a retry of the exact same, already-accepted
+          // commitment (same signature) — anything else (a different
+          // signature for the same amount) is still stale, never accepted.
+          if (previous !== undefined && previous.signature === input.signature) {
+            return { accepted: true, remainingRaw: clampMin0(depositRaw - previousRaw), reused: true };
+          }
           return { accepted: false, reason: "stale", highestRaw: previousRaw };
         }
         const record: VoucherRecord = {
