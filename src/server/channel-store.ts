@@ -21,7 +21,7 @@
 // monotonic accept — the same guarantees an `AtomicStore.update()` would
 // provide, purpose-built for our own JSONL instead of a generic KV shape.
 
-import type { VoucherLog, VoucherRecord } from "../persistence/voucher-log.ts";
+import type { VoucherIndexEntry, VoucherLog, VoucherRecord } from "../persistence/voucher-log.ts";
 import { createChannelMutex, type ChannelMutex } from "../shared/mutex.ts";
 
 export type AcceptCommitmentInput = {
@@ -45,6 +45,10 @@ export type ChannelVoucherStore = {
    * accepted "0" by definition, same convention `agent/routes/vouchers.ts`
    * uses). */
   getHighestRaw(channel: string): bigint;
+  /** The full highest-accepted record (amount + signature + pubkey) —
+   * `closeChannel` (`channel-service.ts`) needs the signature to build the
+   * `close(amount, signature)` contract call, not just the raw amount. */
+  getHighest(channel: string): VoucherIndexEntry | undefined;
   /**
    * Serializes accept() calls per channel (mutex) so two concurrent
    * requests can never both "win" against the same previous highest, then
@@ -70,6 +74,9 @@ export function createChannelVoucherStore(
   return {
     getHighestRaw(channel) {
       return voucherLog.getHighest(channel)?.cumulativeAmountRaw ?? 0n;
+    },
+    getHighest(channel) {
+      return voucherLog.getHighest(channel);
     },
     accept(input, depositRaw) {
       return mutex.withChannelLock(input.channel, async () => {
