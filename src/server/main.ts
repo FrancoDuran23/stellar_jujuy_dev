@@ -6,7 +6,7 @@
 // prevents the process from starting.
 
 import "dotenv/config";
-import { createServerBoot } from "../config/boot.ts";
+import { createServerBoot, createServerChannelBoot } from "../config/boot.ts";
 import { parseServerEnv } from "../config/env.ts";
 import { createEventEmitter, createWebhookSink } from "../shared/events.ts";
 import { createServerApp } from "./app.ts";
@@ -38,7 +38,22 @@ const webhookSink =
 const emitEvent = createEventEmitter(webhookSink);
 
 const boot = createServerBoot();
-const app = createServerApp({ boot, network, explorerBaseUrl, pricePerMibRaw, emit: emitEvent });
+
+// Stage 2 (WU7): only wired when CHANNEL_CONTRACT is configured (the same
+// gate config/env.ts enforces). A stage-1-only deployment never builds this
+// at all — createServerApp simply omits /channel/vouchers and the stage-2
+// /ready detail.
+const channel = parsedAtStartup.ok ? parsedAtStartup.value.CHANNEL_CONTRACT : undefined;
+const channelBoot = channel !== undefined ? createServerChannelBoot() : undefined;
+
+const app = createServerApp({
+  boot,
+  network,
+  explorerBaseUrl,
+  pricePerMibRaw,
+  emit: emitEvent,
+  ...(channelBoot !== undefined ? { channelBoot, channel } : {}),
+});
 
 app.listen(port, () => {
   process.stdout.write(
@@ -47,4 +62,14 @@ app.listen(port, () => {
   // FC-R1: the payment instance is built only after the port already
   // accepts connections.
   void boot.ensureReady();
+  // Same FC-R1 ordering for the channel instance; the close-monitor only
+  // starts once the channel instance is actually ready (never before the
+  // port is accepting connections).
+  if (channelBoot !== undefined) {
+    void channelBoot.ensureReady().then((result) => {
+      if (result.status === "ready") {
+        result.instance.closeMonitor.start();
+      }
+    });
+  }
 });
