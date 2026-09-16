@@ -293,6 +293,97 @@ export function createRealChannelSigner(
 }
 
 /**
+ * Decorates any `SignerPort` so that, once signing succeeds, the same
+ * commitment is ALSO delivered to the payment server's `POST /channel/
+ * vouchers` (design 4.2's "A->>S: POST /channel/vouchers (voucher + MPP
+ * credential)" step) before returning — so the caller
+ * (`agent/routes/vouchers.ts`) appends to its own JSONL, and therefore
+ * responds M2 to the gateway, only after the server has durably accepted
+ * the voucher (matches the exact ordering design 4.2 specifies).
+ *
+ * Integration-shape decision (task brief, documented per its own
+ * instruction to "state which path you took and why" — see docs/sdd/
+ * payments-mpp.md §6, Lote E for the full writeup): this is a HAND-ROLLED
+ * POST, not `@stellar/mpp/channel/client`'s `stellar.channel(...)` Method.
+ * Two independent reasons ruled the SDK client flow out:
+ *
+ * 1. The SDK client's `createCredential` only reports lifecycle events
+ *    (`challenge`/`signing`/`signed{cumulativeAmount}`) — it never exposes
+ *    the raw signature/commitmentPubkey hex to the caller. M2 (the agent's
+ *    OWN response contract to the gateway, frozen and external) needs
+ *    exactly those two fields verbatim, so driving the SDK client would
+ *    still require an independent hand-rolled signature afterward anyway —
+ *    pure duplicated RPC/signing work for zero benefit, since ed25519 is
+ *    deterministic and both signatures would be byte-identical.
+ * 2. The SDK server's `verify()` (the other half of that Method) is only
+ *    reachable through its own challenge/credential round trip mediated by
+ *    an `Mppx` server instance — there is no supported way to call it for a
+ *    voucher whose signature was already computed independently. Driving
+ *    the full client flow just to reach that `verify()` would mean
+ *    re-implementing our own internal agent -> server hop as a second,
+ *    redundant HTTP 402 dance for a link both ends already fully control
+ *    and trust (the ed25519 signature itself is the credential — see
+ *    `server/routes/channel.ts`'s doc comment).
+ *
+ * The commitment IS produced with the SDK-equivalent recipe
+ * (`createRealChannelSigner`: simulate + bind-check + sign, spike Part A),
+ * and the server verifies it with that exact same recipe
+ * (`createServerChannelVerifyPort`) — only the wire transport between the
+ * two is hand-rolled instead of mppx's Method/Credential envelope.
+ */
+export function createServerDeliveringSigner(
+  innerSigner: SignerPort,
+  options: { paymentServerUrl: string; fetchImpl?: typeof fetch; timeoutMs?: number },
+): SignerPort {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? 8000;
+  return {
+    async sign(input) {
+      const result = await innerSigner.sign(input);
+      const url = new URL("/channel/vouchers", options.paymentServerUrl).toString();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            channel: input.channel,
+            network: input.network,
+            cumulativeAmount: input.cumulativeAmount,
+            signature: result.signature,
+            commitmentPubkey: result.commitmentPubkey,
+            sessionId: input.sessionId,
+            cumulativeBytes: input.cumulativeBytes,
+            meterReadingId: input.meterReadingId,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch (error) {
+        throw new Error(`payment server returned a non-JSON response (HTTP ${response.status}): ${messageOf(error)}`);
+      }
+      if (!response.ok) {
+        throw new Error(`payment server rejected the voucher delivery (HTTP ${response.status}): ${JSON.stringify(body)}`);
+      }
+      const accepted = (body as { accepted?: unknown }).accepted;
+      if (accepted !== true) {
+        const reason = (body as { reason?: unknown }).reason;
+        const detail = (body as { detail?: unknown }).detail;
+        throw new Error(`payment server rejected the voucher: ${String(reason)} — ${String(detail)}`);
+      }
+      return result;
+    },
+  };
+}
+
+/**
  * Real, contract-backed `ChannelRpcPort` (WU6, T6.3's underlying driver).
  * Every call is wrapped so a Soroban RPC hiccup never throws past this
  * function (the spike's XDR crash finding, docs/sdd/payments-mpp.md §6: any
@@ -694,7 +785,9 @@ export async function buildAgentVouchersInstance(
   const stage2 = env.CHANNEL_CONTRACT !== undefined && env.COMMITMENT_SECRET !== undefined;
   const channelDeps: ChannelContractDeps = { rpcUrl: env.SOROBAN_RPC_URL, network: env.STELLAR_NETWORK };
   const defaultSigner = stage2
-    ? createRealChannelSigner(env.COMMITMENT_SECRET!, channelDeps)
+    ? createServerDeliveringSigner(createRealChannelSigner(env.COMMITMENT_SECRET!, channelDeps), {
+        paymentServerUrl: env.PAYMENT_SERVER_URL,
+      })
     : createFakeSigner();
   const defaultDepositPort = stage2
     ? createChannelCache(createStellarChannelRpcPort(env))

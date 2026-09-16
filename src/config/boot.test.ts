@@ -11,12 +11,14 @@ import {
   createFailClosedBoot,
   createServerBoot,
   createServerChannelBoot,
+  createServerDeliveringSigner,
   toM2Reason,
   type BuildResult,
   type UnavailableReason,
 } from "./boot.ts";
 import type { ChargePort } from "../server/charge-service.ts";
 import { parseAgentEnv, parseServerEnv } from "./env.ts";
+import type { SignerPort } from "../agent/signer.ts";
 
 const fakeChargePort: ChargePort = {
   async handle() {
@@ -410,4 +412,82 @@ test("createAgentBoot: a malformed GATEWAY_TOKEN-less env becomes unavailable/co
   if (state.status !== "unavailable") return;
   assert.equal(state.reason, "config_invalid");
   assert.match(state.detail, /GATEWAY_TOKEN/);
+});
+
+// --- createServerDeliveringSigner (WU7): agent -> server delivery wrapper ---
+
+function fakeInnerSigner(): SignerPort {
+  return {
+    async sign() {
+      return { signature: "a".repeat(128), commitmentPubkey: "b".repeat(64) };
+    },
+  };
+}
+
+test("createServerDeliveringSigner: POSTs to /channel/vouchers and returns the inner signer's result when accepted", async () => {
+  let capturedUrl: string | undefined;
+  let capturedBody: unknown;
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ accepted: true, remaining: "999000" }), { status: 200 });
+  }) as typeof fetch;
+
+  const signer = createServerDeliveringSigner(fakeInnerSigner(), {
+    paymentServerUrl: "http://127.0.0.1:8080",
+    fetchImpl,
+  });
+  const result = await signer.sign({
+    channel: `C${"A".repeat(55)}`,
+    network: "stellar:testnet",
+    cumulativeAmount: "1000",
+    sessionId: "sess_1",
+    cumulativeBytes: 1_048_576,
+    meterReadingId: "mr_1",
+  });
+  assert.equal(result.signature, "a".repeat(128));
+  assert.equal(capturedUrl, "http://127.0.0.1:8080/channel/vouchers");
+  assert.equal((capturedBody as { cumulativeAmount: string }).cumulativeAmount, "1000");
+  assert.equal((capturedBody as { signature: string }).signature, "a".repeat(128));
+});
+
+test("createServerDeliveringSigner: throws when the server rejects the voucher (accepted:false)", async () => {
+  const fetchImpl = (async () =>
+    new Response(JSON.stringify({ accepted: false, reason: "channel_closing", detail: "close_start seen" }), {
+      status: 200,
+    })) as typeof fetch;
+  const signer = createServerDeliveringSigner(fakeInnerSigner(), {
+    paymentServerUrl: "http://127.0.0.1:8080",
+    fetchImpl,
+  });
+  await assert.rejects(
+    () =>
+      signer.sign({
+        channel: `C${"A".repeat(55)}`,
+        network: "stellar:testnet",
+        cumulativeAmount: "1000",
+        sessionId: "sess_1",
+        cumulativeBytes: 1,
+        meterReadingId: "mr_1",
+      }),
+    /channel_closing/,
+  );
+});
+
+test("createServerDeliveringSigner: throws on a non-2xx HTTP response", async () => {
+  const fetchImpl = (async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 })) as typeof fetch;
+  const signer = createServerDeliveringSigner(fakeInnerSigner(), {
+    paymentServerUrl: "http://127.0.0.1:8080",
+    fetchImpl,
+  });
+  await assert.rejects(() =>
+    signer.sign({
+      channel: `C${"A".repeat(55)}`,
+      network: "stellar:testnet",
+      cumulativeAmount: "1000",
+      sessionId: "sess_1",
+      cumulativeBytes: 1,
+      meterReadingId: "mr_1",
+    }),
+  );
 });
