@@ -18,7 +18,8 @@
     "channel:state": "node src/agent/channel.ts state",
     "channel-admin:state": "node src/server/channel-admin.ts state",
     "channel-admin:close": "node src/server/channel-admin.ts close",
-    "meter:demo": "node src/meter/demo-meter.ts"
+    "meter:demo": "node src/meter/demo-meter.ts",
+    "demo:flow": "node scripts/demo-flow.ts"
   },
   "dependencies": {
     "@stellar/mpp": "0.7.1",
