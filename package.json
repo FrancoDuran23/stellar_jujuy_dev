@@ -17,7 +17,8 @@
     "channel:refund": "node src/agent/channel.ts refund",
     "channel:state": "node src/agent/channel.ts state",
     "channel-admin:state": "node src/server/channel-admin.ts state",
-    "channel-admin:close": "node src/server/channel-admin.ts close"
+    "channel-admin:close": "node src/server/channel-admin.ts close",
+    "meter:demo": "node src/meter/demo-meter.ts"
   },
   "dependencies": {
     "@stellar/mpp": "0.7.1",
