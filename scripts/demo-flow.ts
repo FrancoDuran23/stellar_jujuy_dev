@@ -13,7 +13,7 @@
 
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
-import type { ConnectivitySession } from "../src/models/ConnectivitySession.ts";
+import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
 
 async function runDemoFlow() {
@@ -23,32 +23,32 @@ async function runDemoFlow() {
 
   // 1. Simular la respuesta de Telnyx (Proveedor de Conectividad)
   const mockTelnyxProvider: ConnectivityProvider = {
-    async provisioneSIM(options) {
-      console.log(`📡 [TELNYX API] Aprovisionando eSIM para viaje a Brasil (Plan: ${options.dataLimitMb ?? 1000} MB)...`);
+    async purchaseEsim(userId: string) {
+      console.log(`📡 [TELNYX API] Aprovisionando eSIM para usuario ${userId}...`);
       return {
         simCardId: "sim_br_99812",
         iccid: "8955101234567890123F",
-        activationQrCodeUrl: "https://qr.telnyx.com/v1/profile/sim_br_99812",
+        activationCode: "LPA:1$qr.telnyx.com$sim_br_99812",
       };
     },
-    async enableSIM(simCardId) {
+    async enable(simCardId: string) {
       console.log(`🟢 [TELNYX API] SIM ${simCardId} HABILITADA en antenas Vivo/TIM.`);
     },
-    async disableSIM(simCardId) {
+    async disable(simCardId: string) {
       console.log(`🔴 [TELNYX API] SIM ${simCardId} DESHABILITADA (Corte de Datos por Límite de Saldo).`);
     },
-    async setDataLimit(simCardId, limitMb) {
+    async setDataLimit(simCardId: string, limitMb: number) {
       console.log(`📉 [TELNYX API] Nuevo data_limit asignado a SIM ${simCardId}: ${limitMb} MB.`);
     },
-    async getUsage() {
-      return { rawUsageMb: 120 };
+    async getUsage(_simCardId: string) {
+      return { mb: 120, status: "enabled" };
     },
   };
 
   // 2. Simular el estado del Canal de Soroban en la red de Stellar
   const initialChannelDepositRaw = 5_000_000n; // 5 USDC en raw units (5 MB a 1 USDC/MB)
   const mockChannelStatePort: ChannelStatePort = {
-    async getChannelInfo(channel) {
+    async getChannelInfo(_channel: string) {
       return {
         found: true,
         depositRaw: initialChannelDepositRaw,
@@ -62,18 +62,16 @@ async function runDemoFlow() {
   };
 
   // 3. Crear sesión del viajero
-  const esim = await mockTelnyxProvider.provisioneSIM({ dataLimitMb: 5 });
-  await mockTelnyxProvider.enableSIM(esim.simCardId);
+  const esim = await mockTelnyxProvider.purchaseEsim("user_argentino_123");
+  await mockTelnyxProvider.enable(esim.simCardId);
 
-  const session: ConnectivitySession = {
-    sessionId: "sess_brasil_2026",
+  const session: ConnectivitySession = createConnectivitySession({
+    id: "sess_brasil_2026",
+    userId: "user_argentino_123",
     channelId: "C_CANAL_SOROBAN_123",
     simCardId: esim.simCardId,
     iccid: esim.iccid,
-    meteredBytes: 0n,
-    status: "ACTIVE",
-    createdAtIso: new Date().toISOString(),
-  };
+  });
 
   const balanceAdapter = createStellarChannelBalanceAdapter(mockChannelStatePort);
 

@@ -6,10 +6,15 @@
  */
 
 export interface MeterConfig {
-  /** Tamaño de cada tanda/bloque de datos en bytes (ej: 1 MB = 1,048,576 bytes) */
+  /** Tamaño de cada tanda/bloque de datos en bytes (ej: 1 MB = 1,000,000 bytes) */
   chunkSizeBytes: number;
   /** Límite máximo de cuota permitida sin un nuevo vale válido */
   maxUnpaidQuotaBytes: number;
+}
+
+/** Formatea bytes a un texto legible en Megabytes (MB) */
+export function formatMb(bytes: number): string {
+  return `${(bytes / 1_000_000).toFixed(2)} MB`;
 }
 
 export class NetworkDataMeter {
@@ -20,8 +25,8 @@ export class NetworkDataMeter {
 
   constructor(config?: Partial<MeterConfig>) {
     this.config = {
-      chunkSizeBytes: config?.chunkSizeBytes ?? 1_048_576, // 1 MiB por defecto
-      maxUnpaidQuotaBytes: config?.maxUnpaidQuotaBytes ?? 1_048_576,
+      chunkSizeBytes: config?.chunkSizeBytes ?? 1_000_000, // 1 MB por defecto
+      maxUnpaidQuotaBytes: config?.maxUnpaidQuotaBytes ?? 1_000_000,
     };
   }
 
@@ -34,16 +39,20 @@ export class NetworkDataMeter {
     isQuotaAvailable: boolean;
   } {
     if (!this.isConnectionActive) {
-      console.warn(' [MEDIDOR] El tráfico está CORTADO. No se pueden procesar más datos.');
+      console.warn('⚠️ [MEDIDOR] El tráfico está CORTADO. No se pueden procesar más datos.');
       return { cumulativeBytes: this.cumulativeBytes, isQuotaAvailable: false };
     }
 
     this.cumulativeBytes += bytesTransferred;
-    console.log(` [MEDIDOR] Tráfico registrado: +${bytesTransferred} bytes | Total Acumulado: ${this.cumulativeBytes} bytes`);
+    console.log(
+      `📊 [MEDIDOR] Tráfico registrado: +${formatMb(bytesTransferred)} (+${bytesTransferred} bytes) | Total Acumulado: ${formatMb(this.cumulativeBytes)}`
+    );
 
     // Verificar si el consumo supera la cuota pagada
     if (this.cumulativeBytes > this.paidQuotaBytes + this.config.maxUnpaidQuotaBytes) {
-      console.error(` [ALERTA CORTE] Consumo (${this.cumulativeBytes} B) superó la cuota pagada (${this.paidQuotaBytes} B). Cortando tráfico...`);
+      console.error(
+        `🚨 [ALERTA CORTE] Consumo (${formatMb(this.cumulativeBytes)}) superó la cuota pagada (${formatMb(this.paidQuotaBytes)}). Cortando tráfico...`
+      );
       this.isConnectionActive = false;
     }
 
@@ -60,16 +69,22 @@ export class NetworkDataMeter {
     if (newPaidCumulativeBytes >= this.cumulativeBytes) {
       this.paidQuotaBytes = newPaidCumulativeBytes;
       this.isConnectionActive = true;
-      console.log(` [ACREDITACIÓN] Nuevo vale verificado. Cuota pagada actualizada a: ${this.paidQuotaBytes} bytes. Conectividad RESTAURADA.`);
+      console.log(
+        `✅ [ACREDITACIÓN] Nuevo vale verificado. Cuota pagada actualizada a: ${formatMb(this.paidQuotaBytes)}. Conectividad RESTAURADA.`
+      );
     } else {
-      console.warn(` [ACREDITACIÓN RECHAZADA] El vale presentado (${newPaidCumulativeBytes} B) es menor al consumo acumulado (${this.cumulativeBytes} B).`);
+      console.warn(
+        `⚠️ [ACREDITACIÓN RECHAZADA] El vale presentado (${formatMb(newPaidCumulativeBytes)}) es menor al consumo acumulado (${formatMb(this.cumulativeBytes)}).`
+      );
     }
   }
 
   public getStatus() {
     return {
       cumulativeBytes: this.cumulativeBytes,
+      cumulativeMb: formatMb(this.cumulativeBytes),
       paidQuotaBytes: this.paidQuotaBytes,
+      paidQuotaMb: formatMb(this.paidQuotaBytes),
       isConnectionActive: this.isConnectionActive,
     };
   }
@@ -77,14 +92,14 @@ export class NetworkDataMeter {
 
 // Ejemplo de prueba rápida ejecutable si se corre directamente
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.includes('demo-meter.ts')) {
-  console.log(' === Iniciando Prueba del Medidor de Tráfico (Módulo 1) ===\n');
-  const meter = new NetworkDataMeter({ chunkSizeBytes: 512_000, maxUnpaidQuotaBytes: 1_000_000 });
+  console.log('🚀 === Iniciando Prueba del Medidor de Tráfico (Módulo 1) ===\n');
+  const meter = new NetworkDataMeter({ chunkSizeBytes: 500_000, maxUnpaidQuotaBytes: 1_000_000 });
 
   // 1. Simular tráfico dentro del rango de cuota
   meter.recordTraffic(500_000);
   meter.recordTraffic(400_000);
 
-  // 2. Simular pago de vale por 1,500,000 bytes
+  // 2. Simular pago de vale por 1,500,000 bytes (1.5 MB)
   meter.creditPaidQuota(1_500_000);
 
   // 3. Simular más tráfico
@@ -94,5 +109,5 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.includes
   meter.recordTraffic(1_000_000);
   meter.recordTraffic(500_000);
 
-  console.log('\n Estado Final del Medidor:', meter.getStatus());
+  console.log('\n📌 Estado Final del Medidor:', meter.getStatus());
 }

@@ -5,7 +5,10 @@ import {
   createStellarChannelBalanceAdapter,
 } from "./meter-service.ts";
 import type { ConnectivityProvider } from "../providers/connectivity/ConnectivityProvider.ts";
-import type { ConnectivitySession } from "../models/ConnectivitySession.ts";
+import {
+  createConnectivitySession,
+  type ConnectivitySession,
+} from "../models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../server/channel-service.ts";
 
 test("createStellarChannelBalanceAdapter: extrae el depositRaw cuando el canal existe", async () => {
@@ -48,30 +51,28 @@ test("IntegratedMeterService: procesa tráfico dentro del saldo y mantiene la co
   let setDataLimitCalls = 0;
 
   const fakeProvider: ConnectivityProvider = {
-    async provisioneSIM() {
-      return { simCardId: "sim_1", iccid: "89551...", activationQrCodeUrl: "qr" };
+    async purchaseEsim() {
+      return { simCardId: "sim_1", iccid: "89551...", activationCode: "LPA:1$..." };
     },
-    async enableSIM() {},
-    async disableSIM() {
+    async enable() {},
+    async disable() {
       disabledSimCalls++;
     },
     async setDataLimit() {
       setDataLimitCalls++;
     },
     async getUsage() {
-      return { rawUsageMb: 0 };
+      return { mb: 0, status: "enabled" };
     },
   };
 
-  const session: ConnectivitySession = {
-    sessionId: "sess_1",
+  const session: ConnectivitySession = createConnectivitySession({
+    id: "sess_1",
+    userId: "user_1",
     channelId: "C1234567890",
     simCardId: "sim_1",
     iccid: "89551...",
-    meteredBytes: 0n,
-    status: "ACTIVE",
-    createdAtIso: new Date().toISOString(),
-  };
+  });
 
   const fakeBalancePort = {
     async getChannelBalance() {
@@ -98,28 +99,26 @@ test("IntegratedMeterService: deshabilita la SIM si el consumo agota el saldo de
   let disabledSimId = "";
 
   const fakeProvider: ConnectivityProvider = {
-    async provisioneSIM() {
-      return { simCardId: "sim_1", iccid: "89551...", activationQrCodeUrl: "qr" };
+    async purchaseEsim() {
+      return { simCardId: "sim_1", iccid: "89551...", activationCode: "LPA:1$..." };
     },
-    async enableSIM() {},
-    async disableSIM(simCardId) {
+    async enable() {},
+    async disable(simCardId: string) {
       disabledSimId = simCardId;
     },
     async setDataLimit() {},
     async getUsage() {
-      return { rawUsageMb: 0 };
+      return { mb: 0, status: "enabled" };
     },
   };
 
-  const session: ConnectivitySession = {
-    sessionId: "sess_1",
+  const session: ConnectivitySession = createConnectivitySession({
+    id: "sess_1",
+    userId: "user_1",
     channelId: "C1234567890",
     simCardId: "sim_123",
     iccid: "89551...",
-    meteredBytes: 0n,
-    status: "ACTIVE",
-    createdAtIso: new Date().toISOString(),
-  };
+  });
 
   const fakeBalancePort = {
     async getChannelBalance() {

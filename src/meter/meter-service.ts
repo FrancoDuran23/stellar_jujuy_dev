@@ -89,7 +89,7 @@ export class IntegratedMeterService {
     switch (action.kind) {
       case "disable":
         this.logger(`🚨 [POLICY ENFORCER] Deshabilitando SIM en Telnyx: ${action.reason}`);
-        await this.provider.disableSIM(this.session.simCardId);
+        await this.provider.disable(this.session.simCardId);
         break;
 
       case "set_data_limit":
