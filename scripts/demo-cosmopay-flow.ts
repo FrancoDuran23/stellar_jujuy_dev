@@ -66,8 +66,9 @@ async function runCosmoPayDemo() {
   console.log("=======================================================================\n");
 
   // 3. Inicializar el canal Soroban y el medidor de datos con los $5.00 USDC depositados
-  const initialChannelDepositRaw = 50_000_000n; // $5.00 USDC en raw units, 1 raw = 1e-7 USDC (5 MB a 1 USDC/MB)
-  const pricePerMbRaw = 10_000_000n; // 1 USDC por MB
+  const initialChannelDepositRaw = 50_000_000n; // $5.00 USDC en raw units, 1 raw = 1e-7 USDC (2.000 MB a 0,0025 USDC/MB)
+  // 0,0025 USDC por MB = USD 2,48/GB: tarifa pública de Citrus Mobile en Brasil (USD 1,84/GB) × 1,35
+  const pricePerMbRaw = 25_000n;
   const channelStatePort: ChannelStatePort = {
     async getChannelInfo(_channel: string) {
       return {
@@ -129,24 +130,27 @@ async function runCosmoPayDemo() {
     logger: (line) => console.log(`   ${line}`),
   });
 
-  console.log("\n📲 [ESTADO INICIAL] Fondeo Validado con CosmoPay | Saldo en Soroban: $5.00 USDC");
+  console.log("\n📲 [ESTADO INICIAL] Fondeo Validado con CosmoPay | Saldo en Soroban: $5.00 USDC (~2.000 MB a 0,0025 USDC/MB)");
   console.log("----------------------------------------------------------------------------------");
 
   // 4. Simulación de Consumo de MBs
-  console.log("\n🚗 [TRAMO 1] El viajero usa GPS y WhatsApp en Río de Janeiro (+2.0 MB)...");
-  await meterService.processTraffic(2_000_000);
+  console.log("\n🚗 [TRAMO 1] El viajero usa GPS y WhatsApp en Río de Janeiro (+300 MB)...");
+  await meterService.processTraffic(300_000_000);
 
-  console.log("\n📸 [TRAMO 2] El viajero realiza llamadas de voz e imágenes (+2.0 MB)...");
-  await meterService.processTraffic(2_000_000);
+  console.log("\n📸 [TRAMO 2] El viajero sube fotos y audios (+700 MB, acumulado = 1.000 MB)...");
+  await meterService.processTraffic(700_000_000);
 
-  console.log("\n⚠️ [TRAMO 3] Intentando reproducir video HD (+2.0 MB, acumulado = 6.0 MB, supera depósito de $5.00 USDC)...");
-  const result = await meterService.processTraffic(2_000_000);
+  console.log("\n📹 [TRAMO 3] Videollamada (+800 MB, acumulado = 1.800 MB)...");
+  await meterService.processTraffic(800_000_000);
+
+  console.log("\n⚠️ [TRAMO 4] Intentando reproducir video HD (+600 MB, acumulado = 2.400 MB, supera depósito de $5.00 USDC)...");
+  const result = await meterService.processTraffic(600_000_000);
 
   console.log("\n=======================================================================");
   console.log("📌 RESULTADO FINAL DE LA DEMO DE COSMOPAY");
   console.log("=======================================================================");
   console.log(`• Intención CosmoPay Validada: ${intent.id} ($${intent.amount} ${intent.asset})`);
-  console.log(`• Bytes Medidos por Gateway : ${result.meterStatus.cumulativeBytes.toLocaleString()} bytes (~6.0 MB)`);
+  console.log(`• Bytes Medidos por Gateway : ${result.meterStatus.cumulativeBytes.toLocaleString()} bytes (~${(result.meterStatus.cumulativeBytes / 1_000_000).toLocaleString()} MB)`);
   console.log(`• Depósito Soroban Registrado: ${initialChannelDepositRaw.toString()} raw units (5.00 USDC)`);
   console.log(`• Estado de la SIM Telnyx    : ${result.actionApplied.kind === "disable" ? "DESHABILITADA 🔴" : "ACTIVA 🟢"}`);
   console.log("=======================================================================\n");
