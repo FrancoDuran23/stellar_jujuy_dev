@@ -11,7 +11,7 @@
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
 import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
 import { pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
-import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
+import { FakeProvider } from "../src/providers/connectivity/FakeProvider.ts";
 import { createConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
 
@@ -81,40 +81,21 @@ async function activateDataSession(amountStr: string) {
     },
   };
 
-  const mockTelnyxProvider: ConnectivityProvider = {
-    async purchaseEsim(userId: string) {
-      return { simCardId: "sim_danipalermo_01", iccid: "895510000000000001", activationCode: "LPA:1$qr$danipalermo" };
-    },
-    async enable(simCardId: string) {
-      console.log(`🟢 [TELNYX eSIM] SIM ${simCardId} HABILITADA para datos en Brasil.`);
-    },
-    async disable(simCardId: string) {
-      console.log(`🔴 [TELNYX eSIM] SIM ${simCardId} DESHABILITADA (Saldo agotado).`);
-    },
-    async setDataLimit(simCardId: string, limitMb: number) {
-      console.log(`📉 [TELNYX eSIM] data_limit asignado: ${limitMb.toFixed(2)} MB`);
-    },
-    async getUsage() {
-      return { mb: 0, status: "enabled" };
-    },
-  };
-
-  const esim = await mockTelnyxProvider.purchaseEsim("daniPalermo");
-  await mockTelnyxProvider.enable(esim.simCardId);
+  const provider = new FakeProvider();
+  const esim = await provider.provisionEsim("daniPalermo");
 
   const session = createConnectivitySession({
     id: "sess_daniPalermo_testnet",
     userId: "daniPalermo",
     // Formato de contrato Soroban válido (C + 55 base32): lo exige el M1 de POST /vouchers.
     channelId: "CDANIPALERMOCANALAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
 
   const balanceAdapter = createStellarChannelBalanceAdapter(channelStatePort);
   const meterService = new IntegratedMeterService({
     session,
-    provider: mockTelnyxProvider,
+    provider,
     balancePort: balanceAdapter,
     pricePerMbRaw: 1_000_000n,
     // Vales offline: doble en memoria del agente de pagos (POST /vouchers)

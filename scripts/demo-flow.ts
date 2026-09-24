@@ -2,10 +2,10 @@
  * Script de Flujo Completo End-to-End (Demo Hackathon)
  * 
  * Simula el viaje completo de un argentino en Brasil:
- * 1. Aprovisionamiento de la eSIM (Telnyx) y apertura de canal en Soroban (Stellar).
+ * 1. Aprovisionamiento de la eSIM (Citrus, backend `fake` en esta demo) y apertura de canal en Soroban (Stellar).
  * 2. Navegación y consumo progresivo de bytes a través del medidor.
  * 3. Firma y verificación de vales acumulativos (MPP).
- * 4. Ajuste automático de límites en Telnyx y corte si se agota el saldo.
+ * 4. Corte de datos si se agota el saldo del canal (política suspend/noop, R8).
  * 
  * Para ejecutar:
  *   npm run demo:flow
@@ -18,7 +18,7 @@
  *   `npm run agent:serve` corriendo): pide los vales al agente REAL por HTTP.
  *   Requiere además `GATEWAY_TOKEN`, `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW`
  *   (los mismos valores que lee el agente) y opcionalmente `STELLAR_NETWORK`.
- *   Telnyx y el depósito del canal siguen simulados.
+ *   Citrus y el depósito del canal siguen simulados.
  */
 
 import "dotenv/config";
@@ -28,7 +28,7 @@ import {
   type VoucherRequestResult,
 } from "../src/meter/meter-service.ts";
 import { createAgentVoucherPort, createInMemoryVoucherPort, type VoucherPort } from "../src/meter/voucher-port.ts";
-import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
+import { FakeProvider } from "../src/providers/connectivity/FakeProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
 import { arePricesAligned, parseNonNegativeIntegerRaw, pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
@@ -112,29 +112,8 @@ async function runDemoFlow() {
   console.log("✈️  SIMULACIÓN: VIAJERO ARGENTINO ATERRIZA EN BRASIL");
   console.log("===============================================================\n");
 
-  // 1. Simular la respuesta de Telnyx (Proveedor de Conectividad)
-  const mockTelnyxProvider: ConnectivityProvider = {
-    async purchaseEsim(userId: string) {
-      console.log(`📡 [TELNYX API] Aprovisionando eSIM para usuario ${userId}...`);
-      return {
-        simCardId: "sim_br_99812",
-        iccid: "8955101234567890123F",
-        activationCode: "LPA:1$qr.telnyx.com$sim_br_99812",
-      };
-    },
-    async enable(simCardId: string) {
-      console.log(`🟢 [TELNYX API] SIM ${simCardId} HABILITADA en antenas Vivo/TIM.`);
-    },
-    async disable(simCardId: string) {
-      console.log(`🔴 [TELNYX API] SIM ${simCardId} DESHABILITADA (Corte de Datos por Límite de Saldo).`);
-    },
-    async setDataLimit(simCardId: string, limitMb: number) {
-      console.log(`📉 [TELNYX API] Nuevo data_limit asignado a SIM ${simCardId}: ${limitMb} MB.`);
-    },
-    async getUsage(_simCardId: string) {
-      return { mb: 120, status: "enabled" };
-    },
-  };
+  // 1. Simular la respuesta de Citrus (Proveedor de Conectividad)
+  const provider = new FakeProvider();
 
   // 2. Simular el estado del Canal de Soroban en la red de Stellar
   const initialChannelDepositRaw = 50_000_000n; // 5 USDC en raw units (2.000 MB a 0,0025 USDC/MB)
@@ -153,8 +132,7 @@ async function runDemoFlow() {
   };
 
   // 3. Crear sesión del viajero
-  const esim = await mockTelnyxProvider.purchaseEsim("user_argentino_123");
-  await mockTelnyxProvider.enable(esim.simCardId);
+  const esim = await provider.provisionEsim("user_argentino_123");
 
   // Vales: doble offline por defecto, agente real si hay AGENT_VOUCHERS_URL
   const vouchers = resolveVoucherSetup(process.env, initialChannelDepositRaw);
@@ -168,7 +146,6 @@ async function runDemoFlow() {
     id: "sess_brasil_2026",
     userId: "user_argentino_123",
     channelId: vouchers.channelId,
-    simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
 
@@ -176,7 +153,7 @@ async function runDemoFlow() {
 
   const meterService = new IntegratedMeterService({
     session,
-    provider: mockTelnyxProvider,
+    provider,
     balancePort: balanceAdapter,
     pricePerMbRaw: DEMO_PRICE_PER_MB_RAW, // 0,0025 USDC por MB (25,000 raw units)
     voucherPort: vouchers.voucherPort,
@@ -215,7 +192,7 @@ async function runDemoFlow() {
   console.log(`• Depósito del Canal de Soroban: ${initialChannelDepositRaw.toString()} raw units (5.0 USDC)`);
   console.log(`• Último vale (POST /vouchers):  ${describeVoucher(result.voucher)}`);
   console.log(`• Cuota pagada en el medidor:   ${result.meterStatus.paidQuotaMb}`);
-  console.log(`• Estado de la SIM en Telnyx:   ${result.actionApplied.kind === "disable" ? "DESHABILITADA 🔴" : "ACTIVA 🟢"}`);
+  console.log(`• Estado de la SIM:            ${result.actionApplied.kind === "suspend" ? "SUSPENDIDA 🔴" : "ACTIVA 🟢"}`);
   console.log("===============================================================\n");
 }
 

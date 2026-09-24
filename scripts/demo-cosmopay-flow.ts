@@ -6,7 +6,7 @@
  * 2. CosmoPayService genera un Payment Intent SEP-7 (URI + QR) en Stellar Testnet.
  * 3. El usuario firma y paga la transacción usando Cosmo Wallet en Testnet.
  * 4. Astroam valida el txHash con CosmoPay.
- * 5. Los $5.00 USDC acreditados inicializan el canal Soroban y habilitan la eSIM de Telnyx.
+ * 5. Los $5.00 USDC acreditados inicializan el canal Soroban y habilitan la eSIM de Citrus (backend `fake`).
  * 6. El viajero consume megabytes de datos progresivamente en Brasil.
  * 
  * Para ejecutar:
@@ -17,7 +17,7 @@ import { CosmoPayService } from "../src/services/CosmoPayService.ts";
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
 import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
 import { pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
-import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
+import { FakeProvider } from "../src/providers/connectivity/FakeProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
 
@@ -83,40 +83,21 @@ async function runCosmoPayDemo() {
     },
   };
 
-  const mockTelnyxProvider: ConnectivityProvider = {
-    async purchaseEsim(userId: string) {
-      return { simCardId: "sim_cosmopay_001", iccid: "8955109876543210123F", activationCode: "LPA:1$qr$sim001" };
-    },
-    async enable(simCardId: string) {
-      console.log(`🟢 [TELNYX eSIM] SIM ${simCardId} HABILITADA para datos móviles en Brasil.`);
-    },
-    async disable(simCardId: string) {
-      console.log(`🔴 [TELNYX eSIM] SIM ${simCardId} DESHABILITADA (Corte de Datos por Límite de Saldo).`);
-    },
-    async setDataLimit(simCardId: string, limitMb: number) {
-      console.log(`📉 [TELNYX eSIM] data_limit asignado a SIM ${simCardId}: ${limitMb.toFixed(2)} MB`);
-    },
-    async getUsage() {
-      return { mb: 0, status: "enabled" };
-    },
-  };
-
-  const esim = await mockTelnyxProvider.purchaseEsim("user_danipalermo");
-  await mockTelnyxProvider.enable(esim.simCardId);
+  const provider = new FakeProvider();
+  const esim = await provider.provisionEsim("user_danipalermo");
 
   const session: ConnectivitySession = createConnectivitySession({
     id: "sess_cosmopay_2026",
     userId: "user_danipalermo",
     // Formato de contrato Soroban válido (C + 55 base32): lo exige el M1 de POST /vouchers.
     channelId: "CCOSMOPAYDEMOCANALAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
 
   const balanceAdapter = createStellarChannelBalanceAdapter(channelStatePort);
   const meterService = new IntegratedMeterService({
     session,
-    provider: mockTelnyxProvider,
+    provider,
     balancePort: balanceAdapter,
     pricePerMbRaw,
     // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
@@ -152,7 +133,7 @@ async function runCosmoPayDemo() {
   console.log(`• Intención CosmoPay Validada: ${intent.id} ($${intent.amount} ${intent.asset})`);
   console.log(`• Bytes Medidos por Gateway : ${result.meterStatus.cumulativeBytes.toLocaleString()} bytes (~${(result.meterStatus.cumulativeBytes / 1_000_000).toLocaleString()} MB)`);
   console.log(`• Depósito Soroban Registrado: ${initialChannelDepositRaw.toString()} raw units (5.00 USDC)`);
-  console.log(`• Estado de la SIM Telnyx    : ${result.actionApplied.kind === "disable" ? "DESHABILITADA 🔴" : "ACTIVA 🟢"}`);
+  console.log(`• Estado de la SIM            : ${result.actionApplied.kind === "suspend" ? "SUSPENDIDA 🔴" : "ACTIVA 🟢"}`);
   console.log("=======================================================================\n");
 }
 

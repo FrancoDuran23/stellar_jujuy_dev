@@ -28,13 +28,13 @@ Proyecto del hackatón Stellar Apex (equipo AstroAm).
 
 **Fecha:** 24/9/2026 · **Estado:** decidida, pendiente de implementar
 
-**Contexto.** El diseño original
-([`docs/telnyx-wireless-integracion.md`](docs/telnyx-wireless-integracion.md))
-medía los bytes en un gateway propio con WireGuard: todo el tráfico del
-viajero pasaba por un servidor nuestro, como una VPN. Ese gateway nunca se
-construyó (`src/meter/demo-meter.ts` lo simula) y costaría servidores en
-varias regiones, latencia extra, una VPN que el viajero tiene que activar y
-tener todo su tráfico pasando por nosotros.
+**Contexto.** El diseño original (ver [`docs/citrus-mobile-brief.md`](docs/citrus-mobile-brief.md)
+y [`docs/citrus-mobile-spec.md`](docs/citrus-mobile-spec.md)), que la
+migración a Citrus reemplazó, medía los bytes en un gateway propio con
+WireGuard: todo el tráfico del viajero pasaba por un servidor nuestro, como una
+VPN. Ese gateway nunca se construyó (`src/meter/demo-meter.ts` lo simula) y
+costaría servidores en varias regiones, latencia extra, una VPN que el viajero
+tiene que activar y tener todo su tráfico pasando por nosotros.
 
 **Decisión.** Somos un revendedor liviano: gestionamos la eSIM por API, pero
 la medición y el corte los hace el proveedor. Nos quedamos con lo que es
@@ -43,8 +43,8 @@ nuestro: el canal de Stellar, los vales y el reembolso.
 **Consecuencias.**
 
 - El medidor lee el consumo del proveedor en vez de un gateway. Esto
-  reemplaza la regla "facturamos solo con los bytes del gateway" del doc de
-  Telnyx.
+  reemplaza la regla "facturamos solo con los bytes del gateway" del diseño
+  original.
 - Citrus informa el consumo en **USD cobrados** (`total_data_charged_usd`),
   no en bytes. Los bytes se calculan como USD cobrados ÷ tarifa del país.
   Hay que confirmar la precisión con una cuenta real.
@@ -73,8 +73,8 @@ nuestro: el canal de Stellar, los vales y el reembolso.
   packs ni vencimiento, en 218 países, con API para revendedores: crear eSIM,
   habilitar/deshabilitar, billetera por eSIM (`fund`/`defund`) y consumo.
   Primera eSIM gratis; USD 2,45 cada una después.
-- **Telnyx** queda integrado (`TelnyxProvider`) pero descartado para
-  producción: USD 12,50/GB en su mejor tramo, entre 7 y 20 veces más caro.
+- **Telnyx** fue descartado y retirado del repo: USD 12,50/GB en su mejor
+  tramo, entre 7 y 20 veces más caro que Citrus.
 - **Precio al viajero:** tarifa pública de Citrus del país × 1,35 (≈ 33% de
   margen sobre la tarifa de revendedor, que es 10% más baja).
 
@@ -91,9 +91,9 @@ consultadas el 23/9/2026. Chile, Perú, Colombia y Bolivia no están
 publicadas: se ven con cuenta (`GET /rates`).
 
 El precio se configura dos veces y las dos tienen que ser la misma tarifa:
-`TELNYX_PRICE_PER_MB_USDC` (por MB, para la política de corte) y
-`PRICE_PER_MIB_RAW` (por MiB, para los vales). Para Brasil: `25000` y
-`26215`. El medidor no arranca si no coinciden.
+`PRICE_PER_MB_RAW` (por MB, para la política de corte) y `PRICE_PER_MIB_RAW`
+(por MiB, para los vales). Para Brasil: `25000` y `26215`. El medidor no
+arranca si no coinciden.
 
 ## Estado
 
@@ -101,7 +101,7 @@ El precio se configura dos veces y las dos tienen que ser la misma tarifa:
 
 - Pagos MPP en Stellar: cobro puntual (etapa 1) y canal de pago con vales
   firmados, cierre y monitor de disputas (etapa 2), probados en testnet.
-- Integración con Telnyx: eSIMs, política de corte (`PolicyEnforcer`) y
+- Integración con Citrus Mobile: eSIMs, política de corte (suspend/noop) y
   reconciliación.
 - Medidor integrado con el agente de pagos: solo acredita con vale firmado.
 - Fondeo con CosmoPay en testnet (cae a modo simulado si falla la API).
@@ -109,10 +109,12 @@ El precio se configura dos veces y las dos tienen que ser la misma tarifa:
 
 **Falta**
 
-- [ ] `CitrusProvider` con la interfaz `ConnectivityProvider`.
-- [ ] Medidor que lee el consumo del proveedor (en lugar del gateway).
-- [ ] Adaptar la política de corte: `setDataLimit` pasa a ser cargar o
-      retirar fondos de la billetera de la eSIM.
+- [x] `CitrusProvider` con la interfaz `ConnectivityProvider` (client, fábrica
+      y selector, `FakeProvider` para dev y demos).
+- [x] Consumo del proveedor (usage-loop + reconciliación) en lugar del gateway.
+- [x] Política de corte adaptada: suspender/resumir la eSIM vía `suspend`, en
+      lugar de `setDataLimit`.
+- [x] Retiro completo de Telnyx (R15).
 - [ ] Entregar el QR de la eSIM al viajero (interfaz).
 - [ ] `settle` (cobros parciales): el wasm desplegable hoy no lo tiene.
 - [ ] Para calificar al SCF: demo pública, 3 entregables verificados e
@@ -127,7 +129,7 @@ src/
   shared/       precios, mensajes, razones, reintentos, Stellar
   persistence/  registro de vales y del canal
   config/       variables de entorno y arranque
-  providers/    proveedores de eSIM (ConnectivityProvider, TelnyxProvider)
+  providers/    proveedores de eSIM (ConnectivityProvider, CitrusProvider)
   services/     PolicyEnforcer, CosmoPayService
   jobs/         reconciliación de consumo
   meter/        medidor integrado y cliente de vales
@@ -159,6 +161,7 @@ Servidor, agente y canal en testnet: ver
   diseño y evidencia en testnet del componente de pagos.
 - [`docs/payments-mpp-operacion.md`](docs/payments-mpp-operacion.md): cómo
   operar el servidor, el agente y el canal.
-- [`docs/telnyx-wireless-integracion.md`](docs/telnyx-wireless-integracion.md):
-  integración con Telnyx. La parte del gateway propio quedó reemplazada por
-  la decisión de arriba.
+- [`docs/citrus-mobile-brief.md`](docs/citrus-mobile-brief.md) y
+  [`docs/citrus-mobile-spec.md`](docs/citrus-mobile-spec.md): brief y spec de
+  la migración a Citrus Mobile. La parte del gateway propio quedó reemplazada
+  por la decisión de arriba.

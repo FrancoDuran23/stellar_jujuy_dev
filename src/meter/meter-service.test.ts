@@ -4,7 +4,7 @@ import {
   IntegratedMeterService,
   createStellarChannelBalanceAdapter,
 } from "./meter-service.ts";
-import type { ConnectivityProvider } from "../providers/connectivity/ConnectivityProvider.ts";
+import type { ConnectivityProvider, SimUsage } from "../providers/connectivity/ConnectivityProvider.ts";
 import {
   createConnectivitySession,
   type ConnectivitySession,
@@ -32,6 +32,8 @@ function voucherOptions(depositRaw: bigint, voucherPort?: VoucherPort) {
     voucherPricePerMibRaw: PRICE_PER_MIB_RAW,
   };
 }
+
+const ACTIVE_USAGE: SimUsage = { chargedMicroUsd: 0n, walletMicroUsd: 0n, status: "active", asOf: "" };
 
 test("createStellarChannelBalanceAdapter: extrae el depositRaw cuando el canal existe", async () => {
   const fakeStatePort: ChannelStatePort = {
@@ -98,22 +100,21 @@ test("createStellarChannelBalanceAdapter: lanza error si el canal no existe", as
 });
 
 test("IntegratedMeterService: procesa tráfico dentro del saldo y mantiene la conexión activa", async () => {
-  let disabledSimCalls = 0;
-  let setDataLimitCalls = 0;
+  let suspendedCalls = 0;
 
   const fakeProvider: ConnectivityProvider = {
-    async purchaseEsim() {
-      return { simCardId: "sim_1", iccid: "89551...", activationCode: "LPA:1$..." };
+    async provisionEsim() {
+      throw new Error("not reached");
     },
-    async enable() {},
-    async disable() {
-      disabledSimCalls++;
+    async topUp() {},
+    async suspend() {
+      suspendedCalls++;
     },
-    async setDataLimit() {
-      setDataLimitCalls++;
-    },
+    async resume() {},
+    async refundUnused() {},
+    async terminate() {},
     async getUsage() {
-      return { mb: 0, status: "enabled" };
+      return ACTIVE_USAGE;
     },
   };
 
@@ -121,7 +122,6 @@ test("IntegratedMeterService: procesa tráfico dentro del saldo y mantiene la co
     id: "sess_1",
     userId: "user_1",
     channelId: CHANNEL,
-    simCardId: "sim_1",
     iccid: "89551...",
   });
 
@@ -142,27 +142,28 @@ test("IntegratedMeterService: procesa tráfico dentro del saldo y mantiene la co
 
   const res = await service.processTraffic(500_000); // 0.5 MB consumidos
   assert.equal(res.actionApplied.kind, "noop");
-  assert.equal(disabledSimCalls, 0);
-  assert.equal(setDataLimitCalls, 0);
+  assert.equal(suspendedCalls, 0);
   assert.equal(res.meterStatus.cumulativeBytes, 500_000);
   assert.equal(res.voucher.kind, "signed");
   assert.equal(res.meterStatus.paidQuotaBytes, 500_000);
 });
 
-test("IntegratedMeterService: deshabilita la SIM si el consumo agota el saldo del canal", async () => {
-  let disabledSimId = "";
+test("IntegratedMeterService: suspende la eSIM si el consumo agota el saldo del canal", async () => {
+  let suspendedIccid = "";
 
   const fakeProvider: ConnectivityProvider = {
-    async purchaseEsim() {
-      return { simCardId: "sim_1", iccid: "89551...", activationCode: "LPA:1$..." };
+    async provisionEsim() {
+      throw new Error("not reached");
     },
-    async enable() {},
-    async disable(simCardId: string) {
-      disabledSimId = simCardId;
+    async topUp() {},
+    async suspend(iccid: string) {
+      suspendedIccid = iccid;
     },
-    async setDataLimit() {},
+    async resume() {},
+    async refundUnused() {},
+    async terminate() {},
     async getUsage() {
-      return { mb: 0, status: "enabled" };
+      return ACTIVE_USAGE;
     },
   };
 
@@ -170,7 +171,6 @@ test("IntegratedMeterService: deshabilita la SIM si el consumo agota el saldo de
     id: "sess_1",
     userId: "user_1",
     channelId: CHANNEL,
-    simCardId: "sim_123",
     iccid: "89551...",
   });
 
@@ -191,30 +191,30 @@ test("IntegratedMeterService: deshabilita la SIM si el consumo agota el saldo de
 
   // Consumir 2 MB (supera el saldo del canal de 1 MB)
   const res = await service.processTraffic(2_000_000);
-  assert.equal(res.actionApplied.kind, "disable");
-  assert.equal(disabledSimId, "sim_123");
+  assert.equal(res.actionApplied.kind, "suspend");
+  assert.equal(suspendedIccid, "89551...");
 });
 
 // --- Integración con POST /vouchers (VoucherPort) ---------------------------
 
-type ProviderCalls = { disabled: string[]; dataLimits: number[] };
+type ProviderCalls = { suspended: string[] };
 
 function recordingProvider(): ConnectivityProvider & { calls: ProviderCalls } {
-  const calls: ProviderCalls = { disabled: [], dataLimits: [] };
+  const calls: ProviderCalls = { suspended: [] };
   return {
     calls,
-    async purchaseEsim() {
-      return { simCardId: "sim_1", iccid: "89551...", activationCode: "LPA:1$..." };
+    async provisionEsim() {
+      throw new Error("not reached");
     },
-    async enable() {},
-    async disable(simCardId: string) {
-      calls.disabled.push(simCardId);
+    async topUp() {},
+    async suspend(iccid: string) {
+      calls.suspended.push(iccid);
     },
-    async setDataLimit(_simCardId: string, mb: number) {
-      calls.dataLimits.push(mb);
-    },
+    async resume() {},
+    async refundUnused() {},
+    async terminate() {},
     async getUsage() {
-      return { mb: 0, status: "enabled" };
+      return ACTIVE_USAGE;
     },
   };
 }
@@ -229,7 +229,6 @@ function makeService(opts: {
     id: "sess_v",
     userId: "user_1",
     channelId: CHANNEL,
-    simCardId: "sim_v",
     iccid: "89551...",
   });
   return new IntegratedMeterService({
@@ -300,7 +299,7 @@ test("IntegratedMeterService: pide el vale con el M1 del acumulado y acredita so
 test("IntegratedMeterService: un rechazo no reintentable NO acredita y el medidor termina cortando", async () => {
   const provider = recordingProvider();
   const port = capturingPort((m1) => unsignedFor(m1, "channel_closing"));
-  // Depósito holgado: la política de Telnyx no tiene motivo para actuar.
+  // Depósito holgado: la política no tiene motivo para actuar.
   const service = makeService({ balanceRaw: 100_000_000n, voucherPort: port, provider });
 
   const first = await service.processTraffic(800_000);
@@ -313,11 +312,11 @@ test("IntegratedMeterService: un rechazo no reintentable NO acredita y el medido
   const second = await service.processTraffic(800_000);
   assert.equal(second.meterStatus.paidQuotaBytes, 0);
   assert.equal(second.meterStatus.isConnectionActive, false);
-  // La política de Telnyx no cambia: sin depósito agotado, no toca la SIM.
-  assert.deepEqual(provider.calls, { disabled: [], dataLimits: [] });
+  // La política no cambia: sin depósito agotado, no toca la eSIM.
+  assert.deepEqual(provider.calls, { suspended: [] });
 });
 
-test("IntegratedMeterService: channel_exhausted no acredita y la política deshabilita la SIM", async () => {
+test("IntegratedMeterService: channel_exhausted no acredita y la política suspende la eSIM", async () => {
   const provider = recordingProvider();
   const service = makeService({
     balanceRaw: 1_000_000n, // 1 MB de depósito
@@ -330,27 +329,44 @@ test("IntegratedMeterService: channel_exhausted no acredita y la política desha
   if (res.voucher.kind !== "unsigned") return;
   assert.equal(res.voucher.envelope.reason, "channel_exhausted");
   assert.equal(res.voucher.envelope.retryable, false);
-  assert.equal(res.actionApplied.kind, "disable");
-  assert.deepEqual(provider.calls.disabled, ["sim_v"]);
+  assert.equal(res.actionApplied.kind, "suspend");
+  assert.deepEqual(provider.calls.suspended, ["89551..."]);
   assert.equal(res.meterStatus.paidQuotaBytes, 0);
   assert.equal(res.meterStatus.isConnectionActive, false);
 });
 
-test("IntegratedMeterService: set_data_limit ajusta Telnyx y acredita solo con vale firmado", async () => {
-  const provider = recordingProvider();
-  const service = makeService({
-    balanceRaw: 5_000_000n,
-    voucherPort: createInMemoryVoucherPort({ depositRaw: 5_000_000n }),
-    provider,
-  });
+// --- processCumulative (R8): la ruta del usage-loop / vale final del cierre ---
 
-  // 4 MB de 5 MB: remaining 1 MB ≤ 20% del depósito → set_data_limit(1)
-  const res = await service.processTraffic(4_000_000);
-  assert.equal(res.actionApplied.kind, "set_data_limit");
-  assert.deepEqual(provider.calls.dataLimits, [1]);
+test("processCumulative: pide el vale del acumulado, acredita y no suspende cuando el saldo alcanza", async () => {
+  const provider = recordingProvider();
+  const port = capturingPort((m1) => createInMemoryVoucherPort({ depositRaw: 10_000_000n }).requestVoucher(m1));
+  const service = makeService({ balanceRaw: 10_000_000n, voucherPort: port, provider });
+
+  // 1 500 000 bytes equivalentes: 1.5 USDC de costo contra 1 USDC×10 de depósito.
+  const res = await service.processCumulative(1_500_000);
+
+  assert.equal(port.sent.length, 1);
+  assert.equal(port.sent[0]!.cumulativeBytes, 1_500_000);
+  assert.equal(res.actionApplied.kind, "noop");
   assert.equal(res.voucher.kind, "signed");
-  assert.equal(res.meterStatus.paidQuotaBytes, 4_000_000);
-  assert.equal(res.meterStatus.isConnectionActive, true);
+  assert.equal(res.meterStatus.paidQuotaBytes, 1_500_000);
+  // processCumulative NO registra tráfico: el acumulado ya viene de afuera.
+  assert.equal(res.meterStatus.cumulativeBytes, 0);
+  assert.deepEqual(provider.calls.suspended, []);
+});
+
+test("processCumulative: suspende la eSIM cuando el canal se agota y no acredita", async () => {
+  const provider = recordingProvider();
+  // Balance del canal chico (0.1 USDC) pero el agente sí firma el vale.
+  const port = capturingPort((m1) => createInMemoryVoucherPort({ depositRaw: 10_000_000n }).requestVoucher(m1));
+  const service = makeService({ balanceRaw: 1_000_000n, voucherPort: port, provider });
+
+  const res = await service.processCumulative(2_000_000);
+
+  assert.equal(res.actionApplied.kind, "suspend");
+  assert.deepEqual(provider.calls.suspended, ["89551..."]);
+  assert.equal(res.voucher.kind, "signed");
+  assert.equal(res.meterStatus.paidQuotaBytes, 0, "sin cuota: el canal está agotado");
 });
 
 test("IntegratedMeterService: reintenta un reason reintentable y acredita cuando el agente firma", async () => {
@@ -390,7 +406,7 @@ test("IntegratedMeterService: si el reason reintentable persiste, no acredita ni
   assert.equal(res.voucher.envelope.retryable, true);
   assert.equal(res.actionApplied.kind, "noop");
   assert.equal(res.meterStatus.paidQuotaBytes, 0);
-  assert.deepEqual(provider.calls, { disabled: [], dataLimits: [] });
+  assert.deepEqual(provider.calls, { suspended: [] });
 });
 
 test("IntegratedMeterService: una lectura repetida usa el vale reutilizado (reused) y sigue acreditada", async () => {
@@ -455,18 +471,19 @@ test("IntegratedMeterService: rechaza precios desalineados entre la política (M
     id: "sess_1",
     userId: "user_1",
     channelId: CHANNEL,
-    simCardId: "sim_123",
     iccid: "89551...",
   });
   const provider: ConnectivityProvider = {
-    async purchaseEsim() {
-      return { simCardId: "sim_123", iccid: "89551...", activationCode: "LPA:1$x$y" };
+    async provisionEsim() {
+      throw new Error("not reached");
     },
-    async enable() {},
-    async disable() {},
-    async setDataLimit() {},
+    async topUp() {},
+    async suspend() {},
+    async resume() {},
+    async refundUnused() {},
+    async terminate() {},
     async getUsage() {
-      return { mb: 0, status: "enabled" };
+      return ACTIVE_USAGE;
     },
   };
 

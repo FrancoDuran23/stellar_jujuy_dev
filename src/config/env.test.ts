@@ -180,3 +180,61 @@ test("parseAgentEnv treats an empty-string optional variable as unset, not inval
   assert.equal(result.value.CHANNEL_CONTRACT, undefined);
   assert.equal(result.value.BACKEND_EVENTS_URL, undefined);
 });
+
+// --- Connectivity layer (R12): PRICE_PER_MB_RAW y el backend Citrus ---------
+
+test("parseServerEnv defaults CONNECTIVITY_PROVIDER=fake, matching the demos/test suite", () => {
+  const result = parseServerEnv(validServerEnv);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.CONNECTIVITY_PROVIDER, "fake");
+  assert.equal(result.value.MARKUP_BPS, 15000);
+  assert.equal(result.value.USDC_USD_RATE_BPS, 10000);
+});
+
+test("parseServerEnv requires PRICE_PER_MB_RAW with CONNECTIVITY_PROVIDER=citrus", () => {
+  const result = parseServerEnv({ ...validServerEnv, CONNECTIVITY_PROVIDER: "citrus" });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.detail, /PRICE_PER_MB_RAW/);
+});
+
+test("parseServerEnv accepts citrus with an aligned PRICE_PER_MB_RAW (same tariff as per-MiB)", () => {
+  const result = parseServerEnv({
+    ...validServerEnv,
+    CONNECTIVITY_PROVIDER: "citrus",
+    PRICE_PER_MB_RAW: "1000000",
+    PRICE_PER_MIB_RAW: "1048576", // 1_000_000 raw/MB == 1_048_576 raw/MiB (CF-R2)
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.PRICE_PER_MB_RAW, 1_000_000n);
+  assert.equal(typeof result.value.PRICE_PER_MB_RAW, "bigint");
+});
+
+test("parseServerEnv rejects a PRICE_PER_MB_RAW that is not the same tariff as PRICE_PER_MIB_RAW", () => {
+  const result = parseServerEnv({
+    ...validServerEnv,
+    PRICE_PER_MB_RAW: "10000", // por MB…
+    PRICE_PER_MIB_RAW: "10000", // …y el mismo número por MiB: NO son la misma tarifa
+  });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.detail, /PRICE_PER_MB_RAW/);
+});
+
+test("parseServerEnv treats empty-string Citrus variables as unset, not invalid", () => {
+  const result = parseServerEnv({
+    ...validServerEnv,
+    CITRUS_API_KEY: "",
+    CITRUS_BASE_URL: "",
+    CITRUS_WEBHOOK_SECRET: "",
+    PRICE_PER_MB_RAW: "",
+    CITRUS_REQUEST_TIMEOUT_MS: "",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.CITRUS_API_KEY, undefined);
+  assert.equal(result.value.CITRUS_WEBHOOK_SECRET, undefined);
+  assert.equal(result.value.PRICE_PER_MB_RAW, undefined);
+});

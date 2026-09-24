@@ -1,29 +1,26 @@
-// Reconciliation job (connectivity layer): every 60s reads the usage Telnyx
-// reports per SIM, converts MB → bytes EXPLICITLY, and logs the difference
-// against the gateway's own meteredBytes.
+// Reconciliation job (connectivity layer, docs/citrus-mobile-spec.md v2 §7 R13):
+// every classic tick compares what the trip CHARGED the user against what the
+// wallet FUNDED and what the provider still reports in the wallet.
 //
-// The difference is EXPECTED, never a bug (carriers measure differently and
-// with latency): reconciliation is diagnostic only and must never throw nor
-// influence billing. Billing always uses `meteredBytes`
-// (docs/telnyx-wireless-integracion.md §1 and §5.7).
+// The provider reports lifetime consumption (`chargedMicroUsd`), and the trip's
+// own bill is `charged − baseline` (the value read when the trip started, R5).
+// Two reconciliations happen here, both diagnostic only — the differences are
+// EXPECTED (provider billing latency, rounding, the markup) and reconciliation
+// must never throw nor influence billing:
+//
+//   tripChargedMicroUsd = max(0, chargedMicroUsd − chargedBaselineMicroUsd)
+//   expectedWalletMicroUsd = max(0, fundedMicroUsd − tripChargedMicroUsd)
+//   driftMicroUsd = walletMicroUsd − expectedWalletMicroUsd   (model vs provider)
+//
+// R13 removed the carrier/bytes comparison entirely: the provider never reports
+// bytes (SimUsage has no `mb`), so this job no longer converts MB → bytes.
 
 import type { ConnectivityProvider } from "../providers/connectivity/ConnectivityProvider.ts";
 import type { ConnectivitySession } from "../models/ConnectivitySession.ts";
-import { BYTES_PER_MB } from "../services/PolicyEnforcer.ts";
 
 export const RECONCILIATION_INTERVAL_MS_DEFAULT = 60_000;
 
 export type Logger = (line: unknown) => void;
-
-/** The ONLY place MB → bytes conversion happens. Telnyx reports decimal MB,
- * so 1 MB = 1 000 000 bytes (`BYTES_PER_MB`, not 1048576). Returns whole
- * bytes; guards against NaN/negative input instead of emitting garbage. */
-export function mbToBytes(mb: number): bigint {
-  if (!Number.isFinite(mb) || mb < 0) {
-    throw new RangeError(`mbToBytes: MB debe ser un número finito no negativo, recibí ${mb}`);
-  }
-  return BigInt(Math.round(mb * 1_000_000));
-}
 
 export type ReconciliationDeps = {
   provider: ConnectivityProvider;
@@ -31,60 +28,86 @@ export type ReconciliationDeps = {
 };
 
 export type ReconciliationResult = {
-  carrierBytes: bigint;
-  meteredBytes: bigint;
-  diffBytes: bigint;
+  /** Provider-reported lifetime charged, micro-USD. */
+  chargedMicroUsd: bigint;
+  /** The trip baseline discount (R5), micro-USD. */
+  baselineMicroUsd: bigint;
+  /** This trip's bill = charged − baseline (guard ≥ 0), micro-USD. */
+  tripChargedMicroUsd: bigint;
+  /** Prepaid wallet funded this trip, micro-USD. */
+  fundedMicroUsd: bigint;
+  /** Provider-reported remaining wallet, micro-USD. */
+  walletMicroUsd: bigint;
+  /** Model expectation: funded − tripCharged (guard ≥ 0), micro-USD. */
+  expectedWalletMicroUsd: bigint;
+  /** walletMicroUsd − expectedWalletMicroUsd: diagnostic only, never billed. */
+  driftMicroUsd: bigint;
 };
 
-/** Reads provider usage, updates `session.carrierBytes`, and logs the diff.
+/** Reads provider usage, refreshes `chargingChargedMicroUsd`, and logs the
+ * trip-charged vs funded-wallet reconciliation + the provider-wallet drift.
  * Never throws on provider/network errors — it catches, logs a warning, and
- * leaves `carrierBytes` untouched; the diff is informational. */
+ * recomputes from the values already persisted on the session. */
 export async function runReconciliation(
   session: ConnectivitySession,
   deps: ReconciliationDeps,
 ): Promise<ReconciliationResult> {
   const log = deps.logger ?? ((line: unknown) => console.log(JSON.stringify(line)));
-  let mb: number;
-  let status: string;
+  let chargedMicroUsd = session.chargedMicroUsd;
+  let walletMicroUsd = 0n;
+  let status: string | undefined;
   try {
-    const usage = await deps.provider.getUsage(session.simCardId);
-    mb = usage.mb;
+    const usage = await deps.provider.getUsage(session.iccid);
+    chargedMicroUsd = usage.chargedMicroUsd;
+    walletMicroUsd = usage.walletMicroUsd;
     status = usage.status;
+    session.chargedMicroUsd = chargedMicroUsd;
   } catch (error) {
     log({
       level: "warn",
       reason: "reconciliation_usage_unavailable",
       sessionId: session.id,
-      simCardId: session.simCardId,
+      iccid: session.iccid,
       detail: error instanceof Error ? error.message : String(error),
     });
-    return {
-      carrierBytes: session.carrierBytes,
-      meteredBytes: session.meteredBytes,
-      diffBytes: session.meteredBytes - session.carrierBytes,
-    };
   }
 
-  const carrierBytes = mbToBytes(mb);
-  session.carrierBytes = carrierBytes;
-  const meteredBytes = session.meteredBytes;
-  const diffBytes = meteredBytes - carrierBytes;
+  const baselineMicroUsd = session.chargedBaselineMicroUsd;
+  const tripChargedMicroUsd = chargedMicroUsd > baselineMicroUsd
+    ? chargedMicroUsd - baselineMicroUsd
+    : 0n;
+  const fundedMicroUsd = session.fundedMicroUsd;
+  const expectedWalletMicroUsd = fundedMicroUsd > tripChargedMicroUsd
+    ? fundedMicroUsd - tripChargedMicroUsd
+    : 0n;
+  const driftMicroUsd = walletMicroUsd - expectedWalletMicroUsd;
 
   log({
     level: "info",
     reason: "reconciliation_diff",
     sessionId: session.id,
-    simCardId: session.simCardId,
-    carrierStatus: status,
-    carrierMb: mb,
-    carrierBytes: carrierBytes.toString(),
-    meteredBytes: meteredBytes.toString(),
-    diffBytes: diffBytes.toString(),
+    iccid: session.iccid,
+    simstatus: status,
+    chargedMicroUsd: chargedMicroUsd.toString(),
+    baselineMicroUsd: baselineMicroUsd.toString(),
+    tripChargedMicroUsd: tripChargedMicroUsd.toString(),
+    fundedMicroUsd: fundedMicroUsd.toString(),
+    walletMicroUsd: walletMicroUsd.toString(),
+    expectedWalletMicroUsd: expectedWalletMicroUsd.toString(),
+    driftMicroUsd: driftMicroUsd.toString(),
     note:
-      "Diferencia esperada entre el consumo del carrier y el del gateway; se loguea, nunca se factura.",
+      "Cargado del viaje vs fondeado de la wallet, y deriva modelo-vs-proveedor; se loguea, nunca se factura.",
   });
 
-  return { carrierBytes, meteredBytes, diffBytes };
+  return {
+    chargedMicroUsd,
+    baselineMicroUsd,
+    tripChargedMicroUsd,
+    fundedMicroUsd,
+    walletMicroUsd,
+    expectedWalletMicroUsd,
+    driftMicroUsd,
+  };
 }
 
 /** Wraps `runReconciliation` on a timer. Returns a stop function for cleanup.
