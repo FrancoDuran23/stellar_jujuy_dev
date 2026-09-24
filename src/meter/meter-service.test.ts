@@ -10,6 +10,7 @@ import {
   type ConnectivitySession,
 } from "../models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../server/channel-service.ts";
+import { decidePolicy } from "../services/PolicyEnforcer.ts";
 import { buildUnsigned, type Message1, type Message2 } from "../shared/messages.ts";
 import {
   VoucherTransportError,
@@ -51,6 +52,35 @@ test("createStellarChannelBalanceAdapter: extrae el depositRaw cuando el canal e
   const adapter = createStellarChannelBalanceAdapter(fakeStatePort);
   const balance = await adapter.getChannelBalance("C1234567890");
   assert.equal(balance, 10_000_000n);
+});
+
+test("createStellarChannelBalanceAdapter: tras un settle() devuelve el depósito acumulado, no el balance on-chain", async () => {
+  // Depósito 10 USDC; el servidor ya cobró 4 USDC con settle(), así que el
+  // balance() on-chain bajó a 6 USDC. El costo que compara la política es
+  // acumulado desde la apertura, por eso la base debe ser el depósito.
+  const fakeStatePort: ChannelStatePort = {
+    async getChannelInfo() {
+      return {
+        found: true,
+        depositRaw: 100_000_000n,
+        balanceRaw: 60_000_000n,
+        closeEffectiveAtLedger: null,
+        currentLedger: 1000,
+        to: "GABC...",
+        token: "CUSDC...",
+      };
+    },
+  };
+
+  const adapter = createStellarChannelBalanceAdapter(fakeStatePort);
+  const depositRaw = await adapter.getChannelBalance(CHANNEL);
+  assert.equal(depositRaw, 100_000_000n);
+
+  // 5 MB consumidos a 1 USDC/MB: quedan 5 USDC del depósito (no 1 USDC,
+  // que sería restar el costo acumulado al balance ya liquidado).
+  const action = decidePolicy({ balanceRaw: depositRaw, costRaw: 50_000_000n, pricePerMbRaw: 10_000_000n });
+  assert.equal(action.kind, "noop");
+  assert.equal(action.remainingRaw, 50_000_000n);
 });
 
 test("createStellarChannelBalanceAdapter: lanza error si el canal no existe", async () => {

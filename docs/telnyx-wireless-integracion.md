@@ -391,8 +391,12 @@ Qué NO tiene que hacer el gateway:
 
 A cambio, el gateway sí debe cuidar:
 
-- Si el agente responde `stale_reading` (mismo acumulado) → es un reintento,
-  no un error; seguir reportando el mismo valor no corta servicio.
+- Si el gateway reporta el **mismo** acumulado (reintento) → el agente devuelve
+  el vale guardado con `reused: true` (VE-R9): cuenta como firmado y acredita.
+  `stale_reading` es para un acumulado **menor** al ya firmado: el gateway
+  perdió estado y debe resincronizar; no se acredita. El cliente del medidor
+  (`src/meter/voucher-port.ts`) solo reintenta lo que venga con
+  `retryable: true`.
 - Si responde `channel_exhausted` (el vale supera el depósito) → el servicio
   se corta: la SIM quedará deshabilitada por el enforcer.
 
@@ -531,10 +535,15 @@ Puntos de decisión:
 - `pricePerMbRaw` viene de `TELNYX_PRICE_PER_MB_USDC` vía
   `parseNonNegativeIntegerRaw`; sin esa variable el enforcer se niega a crear
   (`RangeError`/error claro) — un precio missing nunca puede pasar por "gratis".
-- **STUB pendiente**: `getChannelBalance(channelId)` es hoy un port que **lanza**
-  (está anotado en el código) hasta conectarse al componente Stellar; cuando se
-  conecte hay que confirmar si el port devuelve el **depósito total** o el
-  **saldo restante** (afecta a `remaining = balance − cost`).
+- **Semántica de `getChannelBalance` (resuelta)**: devuelve el **depósito
+  acumulado** del canal, no el saldo restante. El adaptador real es
+  `createStellarChannelBalanceAdapter` (`src/meter/meter-service.ts`), que lee
+  `depositRaw` (getter `deposited()` → registro local de `channel:open`/`top-up`
+  → `balance()` on-chain como cota inferior). Como `costRaw` es acumulado desde
+  la apertura, `remaining = depósito − costo`, la misma base que el `remaining`
+  de M2 del agente. El `balance()` on-chain NO sirve: baja con cada `settle()` y
+  restarle el costo acumulado contaría dos veces lo ya cobrado. El port por
+  defecto (`STUB_CHANNEL_BALANCE_PORT`) sigue lanzando si nadie inyecta uno.
 - Errores dentro del loop se loguean (`policy_enforcement_failed` con `detail`)
   y el siguiente tick sigue: un fallo de red/Telnyx jamás mata el proceso.
 
@@ -576,7 +585,9 @@ Puntos de decisión:
 
 ### 11.8 Pendientes de integración (dónde sigue el trabajo)
 
-1. **Cablear `getChannelBalance`** al componente Stellar (hoy stub que lanza).
+1. **Cablear `getChannelBalance`** al componente Stellar: hecho vía
+   `createStellarChannelBalanceAdapter` (depósito acumulado, ver §11.4); falta
+   inyectarlo en el `PolicyEnforcer` del proceso que arranque los loops.
 2. **Alimentar `meteredBytes`** desde el gateway: hoy el factory lo inicializa
    en `0n` y nadie lo actualiza todavía (es el puente que describimos en §9).
 3. **Boot de los loops**: `PolicyEnforcer.start()` y

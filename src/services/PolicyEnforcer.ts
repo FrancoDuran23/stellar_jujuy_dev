@@ -13,10 +13,21 @@
 // (`runOnce` applies it through the ConnectivityProvider), so tests verify the
 // math without touching a network.
 //
-// TODO (Stellar wiring): `getChannelBalance` below is a STUB — it must be
-// plugged into the payments component (the one exposing getChannelBalance
-// semantics). The exact meaning (deposit vs. remaining) and raw-unit encoding
-// must be confirmed against that component before the MVP.
+// Balance semantics (resolved against the channel code): `getChannelBalance`
+// returns the channel's CUMULATIVE DEPOSIT in raw units (1e-7 USDC) — NOT a
+// remaining balance. The real adapter is `createStellarChannelBalanceAdapter`
+// (`src/meter/meter-service.ts`), which reads `ChannelChainInfo.depositRaw`
+// (`config/boot.ts`: the contract's `deposited()` getter, falling back to the
+// local `channel:open`/`top-up` record, and last to on-chain `balance()` as a
+// conservative lower bound). That is the right basis because `costRaw` is
+// cumulative since channel open, so `remaining = deposit − cost` — the same
+// basis the agent uses for M2 `remaining` (deposit − highest signed amount).
+// On-chain `balance()` (`depositRaw`'s sibling `balanceRaw`) must NOT be used
+// here: it drops on every server `settle()`, and subtracting the cumulative
+// cost from it would double-count what was already collected. The 20%
+// watermark below is therefore "20% of the deposit", as documented.
+// `STUB_CHANNEL_BALANCE_PORT` remains the default only for callers that do
+// not inject a port.
 
 import { ceilDiv, parseNonNegativeIntegerRaw } from "../shared/money.ts";
 import type { ConnectivityProvider } from "../providers/connectivity/ConnectivityProvider.ts";
@@ -33,7 +44,8 @@ export const LOW_BALANCE_BPS_DEFAULT = 2000;
 /** Suggested cadence for the enforcement loop (the task's "setInterval 5s"). */
 export const ENFORCER_INTERVAL_MS_DEFAULT = 5_000;
 
-/** Port into the Stellar channel component. Stub by default — see TODO above. */
+/** Port into the Stellar channel component: returns the channel's cumulative
+ * deposit in raw units (see "Balance semantics" above). Stub by default. */
 export type ChannelBalancePort = {
   getChannelBalance(channelId: string): Promise<bigint>;
 };
@@ -42,8 +54,8 @@ export const STUB_CHANNEL_BALANCE_PORT: ChannelBalancePort = {
   async getChannelBalance(_channelId: string): Promise<bigint> {
     throw new Error(
       "getChannelBalance STUB: conectar contra el componente Stellar (canal " +
-      "one-way de la sesión) antes del MVP — se espera el saldo restante/depósito " +
-      "en raw units.",
+      "one-way de la sesión) antes del MVP — se espera el depósito acumulado " +
+      "en raw units (ver createStellarChannelBalanceAdapter).",
     );
   },
 };
@@ -60,7 +72,8 @@ export function computeCostRaw(meteredBytes: bigint, pricePerMbRaw: bigint): big
 }
 
 export type DecideInput = {
-  /** Channel available budget (`getChannelBalance`), raw units. */
+  /** Channel cumulative deposit (`getChannelBalance`), raw units — never the
+   * remaining balance: `remaining` is derived here as deposit − cost. */
   balanceRaw: bigint;
   /** Cost accrued so far from gateway-measured bytes, raw units. */
   costRaw: bigint;
