@@ -1,5 +1,11 @@
 # Integración con Telnyx Wireless (eSIM)
 
+> **Actualización 24/9/2026:** la medición con un gateway propio (WireGuard)
+> quedó reemplazada: el consumo se lee del proveedor de eSIM y el proveedor
+> elegido para producción es Citrus Mobile. Ver la decisión en el
+> [README](../README.md#decisión-medir-con-el-proveedor-sin-gateway-propio).
+> El resto de este doc sigue valiendo para `TelnyxProvider`.
+
 Doc dirigido a quien trabaja en el gateway/medidor y NO va a tocar Telnyx,
 pero necesita entender qué llega al sistema, por qué, y qué se espera de su
 código. Si solo leés una sección, que sea la 1 y la 9.
