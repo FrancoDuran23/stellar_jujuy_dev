@@ -6,3 +6,6 @@ node_modules/
 *.log
 data/
 .playwright-mcp/
+aprendizaje/
+cosmos/
+AGENTS.md
