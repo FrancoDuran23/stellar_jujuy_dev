@@ -10,6 +10,7 @@
 
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
 import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
+import { pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
 import { createConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
@@ -119,7 +120,7 @@ async function activateDataSession(amountStr: string) {
     // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
     voucherPort: createInMemoryVoucherPort({ depositRaw: rawUnits }),
     network: "stellar:testnet",
-    voucherPricePerMibRaw: 1_048_576n, // = pricePerMbRaw (1_000_000 raw/MB) expresado por MiB
+    voucherPricePerMibRaw: pricePerMibFromPerMbRaw(1_000_000n), // = pricePerMbRaw expresado por MiB
     meterConfig: { chunkSizeBytes: 1_000_000, maxUnpaidQuotaBytes: 1_000_000 },
     logger: (line) => console.log(`   ${line}`),
   });

@@ -31,14 +31,16 @@ import { createAgentVoucherPort, createInMemoryVoucherPort, type VoucherPort } f
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
-import { parseNonNegativeIntegerRaw } from "../src/shared/money.ts";
+import { arePricesAligned, parseNonNegativeIntegerRaw, pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
 import { isStellarContractId } from "../src/shared/stellar/keys.ts";
 import { isNetwork, type Network } from "../src/shared/stellar/network.ts";
 
 /** Contrato de canal ficticio con formato válido (C + 55 base32) para el modo offline. */
 const DEMO_CHANNEL_ID = "CDEMOCANALSOROBANJUJUYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-/** `pricePerMbRaw` de la demo (1_000_000 raw por MB decimal) expresado por MiB: 1_048_576 raw (el agente cotiza por MiB). */
-const DEMO_PRICE_PER_MIB_RAW = 1_048_576n;
+/** Tarifa de la demo: 1 USDC por MB decimal (1 raw = 1e-7 USDC). */
+const DEMO_PRICE_PER_MB_RAW = 10_000_000n;
+/** La misma tarifa expresada por MiB (el agente cotiza por MiB): 10_485_760 raw. */
+const DEMO_PRICE_PER_MIB_RAW = pricePerMibFromPerMbRaw(DEMO_PRICE_PER_MB_RAW);
 
 type VoucherSetup = {
   mode: "offline" | "agent";
@@ -76,6 +78,9 @@ function resolveVoucherSetup(env: NodeJS.ProcessEnv, depositRaw: bigint): Vouche
   if (gatewayToken === undefined) problems.push("falta GATEWAY_TOKEN");
   if (channelId === undefined || !isStellarContractId(channelId)) problems.push("CHANNEL_CONTRACT falta o no es un contrato C... de 56 chars");
   if (pricePerMibRaw === undefined || pricePerMibRaw === 0n) problems.push("PRICE_PER_MIB_RAW falta o no es un entero positivo");
+  else if (!arePricesAligned(DEMO_PRICE_PER_MB_RAW, pricePerMibRaw)) {
+    problems.push(`PRICE_PER_MIB_RAW=${pricePerMibRaw} no coincide con la tarifa de la demo (1 USDC/MB); usá ${DEMO_PRICE_PER_MIB_RAW}`);
+  }
   if (!isNetwork(network)) problems.push(`STELLAR_NETWORK inválida: "${network}"`);
   if (problems.length > 0 || gatewayToken === undefined || channelId === undefined || pricePerMibRaw === undefined || !isNetwork(network)) {
     throw new Error(`AGENT_VOUCHERS_URL está definida pero la config del modo agente es inválida: ${problems.join("; ")}`);
@@ -131,7 +136,7 @@ async function runDemoFlow() {
   };
 
   // 2. Simular el estado del Canal de Soroban en la red de Stellar
-  const initialChannelDepositRaw = 5_000_000n; // 5 USDC en raw units (5 MB a 1 USDC/MB)
+  const initialChannelDepositRaw = 50_000_000n; // 5 USDC en raw units (5 MB a 1 USDC/MB)
   const mockChannelStatePort: ChannelStatePort = {
     async getChannelInfo(_channel: string) {
       return {
@@ -172,7 +177,7 @@ async function runDemoFlow() {
     session,
     provider: mockTelnyxProvider,
     balancePort: balanceAdapter,
-    pricePerMbRaw: 1_000_000n, // 1 USDC por MB (1,000,000 raw units)
+    pricePerMbRaw: DEMO_PRICE_PER_MB_RAW, // 1 USDC por MB (10,000,000 raw units)
     voucherPort: vouchers.voucherPort,
     network: vouchers.network,
     voucherPricePerMibRaw: vouchers.pricePerMibRaw,
