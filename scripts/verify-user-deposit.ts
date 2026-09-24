@@ -119,7 +119,7 @@ async function activateDataSession(amountStr: string) {
     // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
     voucherPort: createInMemoryVoucherPort({ depositRaw: rawUnits }),
     network: "stellar:testnet",
-    voucherPricePerMibRaw: 1_048_576n, // mismo precio que 1 USDC/MB, expresado por MiB
+    voucherPricePerMibRaw: 1_048_576n, // = pricePerMbRaw (1_000_000 raw/MB) expresado por MiB
     meterConfig: { chunkSizeBytes: 1_000_000, maxUnpaidQuotaBytes: 1_000_000 },
     logger: (line) => console.log(`   ${line}`),
   });

@@ -37,7 +37,7 @@ import { isNetwork, type Network } from "../src/shared/stellar/network.ts";
 
 /** Contrato de canal ficticio con formato válido (C + 55 base32) para el modo offline. */
 const DEMO_CHANNEL_ID = "CDEMOCANALSOROBANJUJUYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-/** 1 USDC por MB decimal = 1_048_576 raw por MiB (el agente cotiza por MiB). */
+/** `pricePerMbRaw` de la demo (1_000_000 raw por MB decimal) expresado por MiB: 1_048_576 raw (el agente cotiza por MiB). */
 const DEMO_PRICE_PER_MIB_RAW = 1_048_576n;
 
 type VoucherSetup = {
