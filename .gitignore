@@ -4,3 +4,8 @@ node_modules/
 !.env.example
 .atl/
 *.log
+data/
+.playwright-mcp/
+aprendizaje/
+cosmos/
+AGENTS.md

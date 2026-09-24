@@ -8,8 +8,8 @@ Registro de todas las fases del SDD para leer de corrido. Fuente de requisitos: 
 | 2. Propuesta | Cerrada | 2026-09-15 |
 | 3. Especificación | Cerrada | 2026-09-15 |
 | 4. Diseño | Cerrada | 2026-09-15 |
-| 5. Tareas | Pendiente | |
-| 6. Implementación | Pendiente | |
+| 5. Tareas | Cerrada | 2026-09-15 |
+| 6. Implementación | En curso (escalones 1 y 2 con evidencia de testnet; falta settle por umbral — sin `settle` en el wasm desplegable) | 2026-09-16 |
 | 7. Verificación | Pendiente | |
 
 ## 1. Exploración (2026-09-15)
@@ -967,10 +967,8 @@ Sobre ese mutex se monta la **coalescencia** que mitiga R11: si llegan varias le
 | `SOROBAN_RPC_URL` | url | no | `https://soroban-testnet.stellar.org` |
 | `USDC_SAC_CONTRACT` | C… 56 | no | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
 | `STELLAR_RECIPIENT` | G… 56 | sí | — |
-| `MPP_SECRET_KEY` | string no vacío | sí | — |
+| `MPP_SECRET_KEY` | string no vacío (secreto HMAC genérico de mppx, no un Keypair — confirmado contra el código fuente instalado, spike S3) | sí | — |
 | `FEE_PAYER_SECRET` | S… 56 | sí | — |
-| `PRICE_PER_MIB_RAW` | string de entero > 0 | sí | — |
-| `CHANNEL_CONTRACT` | C… 56 | sí en escalón 2 | — |
 | `COMMITMENT_PUBKEY` | 64 hex | sí en escalón 2 | — |
 | `FUNDER_ACCOUNT` | G… 56 | sí en escalón 2 | — |
 | `SETTLE_THRESHOLD_BPS` | int 1-10000 | no | `5000` |
@@ -994,15 +992,14 @@ Sobre ese mutex se monta la **coalescencia** que mitiga R11: si llegan varias le
 | `AGENT_PORT` | int | no | `8081` |
 | `GATEWAY_TOKEN` | string no vacío | sí | — |
 | `PAYMENT_SERVER_URL` | url | sí | `http://127.0.0.1:8080` |
-| `MPP_SECRET_KEY` | string no vacío | sí | — |
 | `SIGNER_SECRET` | S… 56 | sí | — |
 | `COMMITMENT_SECRET` | 64 hex | sí en escalón 2 | — |
-| `CHANNEL_CONTRACT` | C… 56 | sí en escalón 2 | — |
-| `PRICE_PER_MIB_RAW` | string de entero > 0 | sí | — |
 | `MAX_DELTA_PER_REQUEST_RAW` | string de entero > 0 | no | `5000000` |
 | `METER_REPORT_INTERVAL_MS` | int | no | `10000` |
 
-`STELLAR_NETWORK`, `SOROBAN_RPC_URL`, `USDC_SAC_CONTRACT`, `DATA_DIR`, `EXPLORER_BASE_URL`, `BACKEND_EVENTS_URL` y `LOG_LEVEL` son compartidas y tienen los mismos defaults.
+El agent **no** lee `MPP_SECRET_KEY`: esa variable es el secreto HMAC que mppx usa para firmar los desafíos 402 en el `server` únicamente (confirmado contra el código fuente instalado de `mppx`, spike S3). La tabla anterior (revisión previa a este addendum) la listaba también para el agent con el mismo nombre; con un único `.env` compartido, `dotenv` se queda con el último valor leído y un proceso pisaba la clave del otro sin avisar (hallazgo de revisión, corregido en este mismo pase — antes de que llegara a implementarse).
+
+`STELLAR_NETWORK`, `SOROBAN_RPC_URL`, `USDC_SAC_CONTRACT`, `DATA_DIR`, `EXPLORER_BASE_URL`, `BACKEND_EVENTS_URL`, `LOG_LEVEL`, `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` son compartidas — mismo nombre, mismo valor, definidas una sola vez en el `.env`, leídas por los dos procesos — y tienen los mismos defaults (`CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` no tienen default, ver nota abajo).
 
 `PRICE_PER_MIB_RAW` no tiene default a propósito: un default convierte un olvido de configuración en una tarifa inventada. Además debe coincidir en los dos procesos, y la verificación de esa coincidencia es el cross-check de D4, que salta como `amount_rejected` en el primer request.
 
@@ -1019,6 +1016,7 @@ SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 USDC_SAC_CONTRACT=CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
 EXPLORER_BASE_URL=https://stellar.expert/explorer/testnet
 PRICE_PER_MIB_RAW=
+CHANNEL_CONTRACT=
 DATA_DIR=./data
 LOG_LEVEL=info
 # BACKEND_EVENTS_URL=
@@ -1028,7 +1026,6 @@ PORT=8080
 STELLAR_RECIPIENT=
 MPP_SECRET_KEY=
 FEE_PAYER_SECRET=
-CHANNEL_CONTRACT=
 COMMITMENT_PUBKEY=
 FUNDER_ACCOUNT=
 SETTLE_THRESHOLD_BPS=5000
@@ -1198,3 +1195,844 @@ Cuatro spikes, 30 minutos cada uno, todos el martes 16 antes de escribir código
 ### 4.10 Fuera de alcance del diseño
 
 No se diseñan acá, y ninguna decisión de arriba depende de ellos: medición de bytes, gateway y conectividad, administración de usuarios, carga de saldo y cualquier UI (§16). Tampoco: mainnet y fondos reales; x402 (cambio de SDD aparte); más de una instancia del servidor y el lock distribuido que eso exigiría; base de datos y consultas sobre el histórico de vales; múltiples canales simultáneos por usuario; gestión de claves multi-tenant, HSM o rotación; stack de métricas y tracing más allá de líneas JSON a stdout; tests de integración automatizados contra testnet; listas de precios firmadas o tarifas dinámicas; y recuperar fondos cuando el funder perdió la trustline, que se detecta y se alarma pero no se resuelve.
+
+## 5. Tareas (2026-09-15)
+
+Plan ejecutable derivado de `docs/sdd/payments-mpp.md` §2-§4 y de `docs/payments-sdd.md` §13-§14. Hoy es 2026-09-15; el escalón 1 vence el miércoles 17, el escalón 2 el lunes 22.
+
+### Cómo leer esta sección
+
+- **Id de tarea** `T<wu>.<n>`: `wu` es el work unit (WU0-WU9, orden de ejecución), `n` el orden dentro del work unit.
+- **Ejecutor** — `agente`: una IA de código lo resuelve sin secretos reales ni testnet (scaffolding, schemas, persistencia, endpoints, middleware fail-closed, `node:test`, docs). `humano`: necesita keypairs de testnet, fondeo XLM, trustline USDC, el faucet, un deploy real, o verificar el Node de una máquina física del equipo. `pareja`: exige acuerdo explícito con el compañero del gateway.
+- **Checkbox** `- [ ]`: se marca `[x]` solo cuando `Cumple` y `Pruebas` están verificados, nunca antes.
+- **Cumple**: ids de `docs/sdd/payments-mpp.md` §3 (`S1-R#`, `VE-R#`, `AC-R#`, `VP-R#`, `FC-R#`, `CL-R#`, `FT-R#`, `EV-R#`, `CF-R#`) o, si la tarea es infraestructura sin requisito de spec directo, la decisión/riesgo de §2 que resuelve.
+- **Compuerta de escalón (no negociable)**: ninguna tarea de WU6 o WU7 (escalón 2) empieza antes de que un humano marque **T8.2** — hash de escalón 1 en el explorador, S1-R7.
+- Los pins exactos de dependencias (incluido `viem@2.56.5`) y `zod` explícito viven en `package.json`; ver diseño §4.4.
+
+### WU0 — Scaffolding
+
+Commit: `feat: scaffold payments-mpp package with pinned dependencies` · Líneas estimadas: 225
+
+- [x] **T0.1** — `package.json` + `tsconfig.json` + `.gitignore`
+  - Ejecutor: agente
+  - Archivos: package.json, tsconfig.json, .gitignore
+  - Cumple: R4, R9 (propuesta 2.5); D1, D2 (diseño 4.1, 4.6) — pins exactos `@stellar/mpp@0.7.1`, `@stellar/stellar-sdk@15.1.0`, `mppx@0.6.29`, `viem@2.56.5`, `zod@4.4.3`; `"type":"module"`, `engines.node >=22.18`, `erasableSyntaxOnly`
+  - Pruebas: `npm run check` sin errores sobre un archivo vacío
+  - Depende de: —
+  - Líneas estimadas: 50
+- [x] **T0.2** — `.env.example` completo
+  - Ejecutor: agente
+  - Archivos: .env.example
+  - Cumple: CF-R1, CF-R3; tabla 3.9 y 4.4 (shared + server + agent)
+  - Pruebas: revisión manual — cada variable de las tablas 3.9/4.4 está presente y comentada
+  - Depende de: T0.1
+  - Líneas estimadas: 45
+- [x] **T0.3** — `scripts/verify-deps.mjs` + README de arranque
+  - Ejecutor: agente
+  - Archivos: scripts/verify-deps.mjs, README.md
+  - Cumple: R4 (mitigación duplicado de peers); onboarding de D1
+  - Pruebas: node:test que mockea `execFileSync` con salida duplicada (falla) y con una sola versión (pasa)
+  - Depende de: T0.1
+  - Líneas estimadas: 110
+- [x] **T0.4** — Primer `node:test` verde
+  - Ejecutor: agente
+  - Archivos: src/shared/\_smoke.test.ts
+  - Cumple: base de D9 (~20 tests unitarios)
+  - Pruebas: `npm test` ejecuta y pasa al menos un caso
+  - Depende de: T0.1, T0.2
+  - Líneas estimadas: 20
+- [ ] **T0.5** — Congelar acuerdos con el gateway
+  - Ejecutor: pareja
+  - Archivos: .env.example (valores acordados), docs/payments-sdd.md §7
+  - Cumple: preguntas abiertas 2.7 (#1 `refund_waiting_period`, #2 canal reutilizado, #3 `PRICE_PER_MIB_RAW`, #4 canal de eventos, #5 agent como proceso separado)
+  - Pruebas: valor y dueño de `PRICE_PER_MIB_RAW` y `MAX_DELTA_PER_REQUEST` escritos en ambos `.env`
+  - Depende de: T0.2
+  - Líneas estimadas: 0 (sin diff de código)
+- [ ] **T0.6** — Node y `verify:deps` en las máquinas del equipo
+  - Ejecutor: humano
+  - Archivos: — (verificación de entorno)
+  - Cumple: R4, R9; verificación día 1 de §13
+  - Pruebas: `node --version` >=22.18 en las tres máquinas (o fallback `--experimental-strip-types`); `npm run verify:deps` sin duplicados
+  - Depende de: T0.1, T0.3
+  - Líneas estimadas: 0
+
+### WU1 — Shared
+
+Commit: `feat(shared): add pricing math, message schemas, and reason taxonomy` · Líneas estimadas: 345
+
+- [x] **T1.1** — `shared/money.ts` (`ceilDiv` BigInt)
+  - Ejecutor: agente
+  - Archivos: src/shared/money.ts, src/shared/money.test.ts
+  - Cumple: AC-R2, AC-R4, AC-R5, AC-R6, S1-R5
+  - Pruebas: `ceilDiv(0)=0n`; `ceilDiv(1048576)=PRICE`; `ceilDiv(1048577)=PRICE+1n`; valor por encima de `MAX_SAFE_INTEGER` exacto en BigInt; monotonía; error total de sesión ≤1 raw unit
+  - Depende de: T0.1
+  - Líneas estimadas: 45
+- [x] **T1.2** — `shared/messages.ts` (schemas zod M1/M2)
+  - Ejecutor: agente
+  - Archivos: src/shared/messages.ts, src/shared/messages.test.ts
+  - Cumple: VE-R2, VE-R3, VE-R4, VE-R5, VE-R7, VE-R8
+  - Pruebas: acepta canónico; rechaza campo faltante, `cumulativeAmount` numérico, `cumulativeAmount` decimal `"0.0125"`, `cumulativeBytes` negativo, `network` desconocida, `channel` de largo inválido
+  - Depende de: T0.1
+  - Líneas estimadas: 100
+- [x] **T1.3** — `shared/reasons.ts` + `shared/events.ts`
+  - Ejecutor: agente
+  - Archivos: src/shared/reasons.ts, src/shared/events.ts, src/shared/reasons.test.ts
+  - Cumple: FT-R1, FT-R5, FT-R6, EV-R1, EV-R2, EV-R3
+  - Pruebas: toda clave de `REASONS` cae en {200,503}; todo 503 es `retryable:true`, todo 200 es `retryable:false`; `emit()` escribe una línea JSON válida a stdout
+  - Depende de: T0.1
+  - Líneas estimadas: 90
+- [x] **T1.4** — `shared/retry.ts` + `shared/stellar/*` (validadores de formato)
+  - Ejecutor: agente
+  - Archivos: src/shared/retry.ts, src/shared/stellar/network.ts, src/shared/stellar/keys.ts, src/shared/stellar/trustline.ts, src/shared/stellar/explorer.ts
+  - Cumple: FT-R3; helpers usados luego por FC-R3, CL-R9
+  - Pruebas: backoff con `RETRY_MAX_ATTEMPTS=4`, delay acotado a `RETRY_MAX_DELAY_MS`; valida G/C/S de 56 chars, hex 64/128; arma `explorerUrl`
+  - Depende de: T0.1
+  - Líneas estimadas: 110
+
+### WU2 — Persistencia
+
+Commit: `feat(persistence): add append-only voucher log and event cursor` · Líneas estimadas: 180
+
+- [x] **T2.1** — `persistence/voucher-log.ts`
+  - Ejecutor: agente
+  - Archivos: src/persistence/voucher-log.ts, src/persistence/voucher-log.test.ts
+  - Cumple: VP-R1, VP-R2, VP-R3, VP-R4, VP-R5, VP-R6, VP-R7, VP-R8
+  - Pruebas: 3 appends → reapertura → máximo recuperado; última línea corrupta → WARN, se trunca, se conserva la anterior; línea corrupta en el medio → `unavailable` con `voucher_log_corrupt`; usa `fs.mkdtempSync` real, sin mocks de fs
+  - Depende de: T1.2, T1.3
+  - Líneas estimadas: 130
+- [x] **T2.2** — `persistence/cursor.ts`
+  - Ejecutor: agente
+  - Archivos: src/persistence/cursor.ts, src/persistence/cursor.test.ts
+  - Cumple: soporte de CL-R6 (cursor persistido); patrón `.tmp` + `fsync` + `rename`
+  - Pruebas: escritura atómica; lectura tras crash simulado a mitad de escritura conserva el valor anterior
+  - Depende de: T1.1
+  - Líneas estimadas: 50
+
+### WU3 — Escalón 1: charge server + cliente headless
+
+Commit: `feat(stage1): add 402 charge server and headless agent client` · Líneas estimadas: 380
+
+- [x] **T3.1** — `config/env.ts` (schemas por rol)
+  - Ejecutor: agente
+  - Archivos: src/config/env.ts, src/config/env.test.ts
+  - Cumple: CF-R1, CF-R2, FC-R3; tabla 3.9/4.4
+  - Pruebas: parsea env válido; rechaza `CHANNEL_CONTRACT`/`COMMITMENT_PUBKEY`/`STELLAR_RECIPIENT` malformados
+  - Depende de: T1.4
+  - Líneas estimadas: 90
+  - **Cerrado 2026-09-15**: schemas separados server/agent sobre un `sharedSchema` común (`.extend()`); el agent NO incluye `MPP_SECRET_KEY` (amendment del orquestador, confirmado contra el código fuente instalado de `mppx` — ver Spike S3 en este §6). `PRICE_PER_MIB_RAW`/`MAX_DELTA_PER_REQUEST_RAW` se transforman a `bigint` en el propio schema. Commit siguiente en este lote.
+- [x] **T3.2** — `server/app.ts` + `routes/charge.ts` + `server/charge-service.ts`
+  - Ejecutor: agente
+  - Archivos: src/server/app.ts, src/server/routes/charge.ts, src/server/charge-service.ts, src/server/app.test.ts, src/server/charge-service.test.ts, src/shared/http.ts, src/shared/http.test.ts, src/server/main.ts
+  - Cumple: S1-R1, S1-R2, S1-R4, S1-R6
+  - Pruebas: 402 sin credencial (mock de `ChargePort`); `payment:{txHash,explorerUrl,network}` en 200; envelope `unsigned` con `reason`/`retryable` cuando falla
+  - Depende de: T3.1, T1.1, T1.3
+  - Líneas estimadas: 140
+  - **Cerrado 2026-09-15**: `ChargeResult{response,settled}` en vez de inferir el resultado del status HTTP (`amount_rejected` también es 200, per FT-R6). `server/app.test.ts` levanta el `Express` real en un puerto efímero y usa `fetch` real — solo el `ChargePort` es fake. `server/main.ts` (no listado en Archivos originalmente, requerido para `npm run server`) implementa el orden `dotenv/config` → `listen()` → `boot.ensureReady()`.
+- [x] **T3.3** — `agent/app.ts` + `agent/charge-client.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/app.ts, src/agent/charge-client.ts, src/agent/app.test.ts, src/agent/charge-client.test.ts, src/agent/main.ts
+  - Cumple: S1-R2, S1-R3
+  - Pruebas: modo pull con `ChargePort` fake; balance XLM del agent no se toca en el fake
+  - Depende de: T3.1
+  - Líneas estimadas: 90
+  - **Cerrado 2026-09-15**: `Mppx.create({polyfill:false})` del lado cliente para no mutar `globalThis.fetch` del proceso (hallazgo de Spike S3, ver más abajo); `agent/app.ts` queda como scaffold mínimo (`/health` únicamente) para que WU5 lo extienda con `POST /vouchers`. `agent/main.ts` (no listado en Archivos originalmente, requerido para `npm run agent` y T8.2) es el CLI headless de un solo cobro.
+- [x] **T3.4** — `scripts/preflight.ts` (código)
+  - Ejecutor: agente
+  - Archivos: scripts/preflight.ts, scripts/preflight.test.ts
+  - Cumple: R1 (mitigación, propuesta 2.5), CL-R12
+  - Pruebas: node:test con `TrustlinePort` fake que reporta falta de trustline en una de las dos cuentas → WARN, no bloquea
+  - Depende de: T1.4
+  - Líneas estimadas: 60
+  - **Cerrado 2026-09-15**: la verificación real de trustline usa Horizon (`@stellar/mpp`'s `HORIZON_URLS`), no Soroban RPC — USDC es un SAC que envuelve un activo clásico, y la trustline clásica vive en el balance de Horizon, no en el estado de cuenta de Soroban RPC. `npm test` amplía su glob a `scripts/**/*.test.ts` (antes solo `.mjs`) para correr este archivo.
+
+### WU4 — Fail-closed, `/ready` y eventos
+
+Commit: `feat: add fail-closed boot, readiness middleware, and webhook events` · Líneas estimadas: 240
+
+- [x] **T4.1** — `config/boot.ts` + `requireReady` + `routes/health.ts`
+  - Ejecutor: agente
+  - Archivos: src/config/boot.ts, src/server/middleware/require-ready.ts, src/server/routes/health.ts
+  - Cumple: FC-R1, FC-R2, FC-R4, FC-R5, FC-R6, FC-R7, FC-R8
+  - Pruebas: `listen()` ocurre antes de `buildInstance()`; RPC caído → `/health` 200, ruta de pago 503 con `Retry-After:5`; reintento acotado a `INIT_RETRY_INTERVAL_MS`
+  - Depende de: T3.1, T3.2
+  - Líneas estimadas: 110
+  - **Cerrado 2026-09-15**: `UnavailableReason = Reason | "config_invalid" | "voucher_log_corrupt"` — `/ready` muestra la razón específica (alarma), toda ruta de pago 503 la traduce a un `Reason` válido de M2 vía `toM2Reason()` (nunca se filtra `config_invalid` al gateway). Verificado end-to-end con `node src/server/main.ts` sin `.env`: escucha en `:8080` de inmediato, `/health` 200, `/ready` y `/paid-resource` 503 nombrando las variables faltantes sin secretos (ver comandos abajo).
+- [x] **T4.2** — `events/emit.ts` (webhook)
+  - Ejecutor: agente
+  - Archivos: src/shared/events.ts (extensión), src/shared/events.test.ts
+  - Cumple: EV-R4, EV-R5, EV-R6
+  - Pruebas: `BACKEND_EVENTS_URL` definido → POST con timeout 2s, hasta 3 reintentos, cola acotada; webhook caído no afecta el pago
+  - Depende de: T1.3, T1.4
+  - Líneas estimadas: 70
+  - **Cerrado 2026-09-15**: reintento del webhook reusa `shared/retry.ts::withRetry` (mismo primitivo que RPC/agent→server, 1+3 intentos) en vez de una implementación paralela. `createEventEmitter(webhookSink?)` envuelve `emit()` sin cambiar su firma; `server/main.ts` lo construye solo si `BACKEND_EVENTS_URL` está definido y lo pasa a `charge-service.ts` vía `app.ts`/`routes/charge.ts` (hilo de cableado no listado explícitamente en las tareas pero necesario para que EV-R4 sea alcanzable en runtime, no solo en el módulo).
+- [x] **T4.3** — Tests de escenarios fail-closed
+  - Ejecutor: agente
+  - Archivos: src/config/boot.test.ts
+  - Cumple: escenarios 3.5 (RPC caído al arrancar, recuperación sin reinicio, diagnóstico en diez segundos)
+  - Pruebas: `COMMITMENT_PUBKEY` malformado → `/ready` nombra la variable sin exponer secretos
+  - Depende de: T4.1
+  - Líneas estimadas: 60
+  - **Cerrado 2026-09-15**: 19 tests cubriendo `createFailClosedBoot` (primer intento siempre corre, throttle de `retryIntervalMs`, recuperación sin reinicio, llamadas concurrentes comparten un solo intento, `buildInstance` que lanza nunca se propaga sin capturar) y `createServerBoot` (env inválido → `config_invalid` sin fuga de secretos, delegación a un `buildChargeInstance` fake). El escenario "RPC caído / recuperación" también se ejerce contra `server/app.ts` real en `app.test.ts` (T3.2).
+
+### WU5 — `POST /vouchers` (escalón 1.5, contra consumo simulado)
+
+Commit: `feat(agent): add POST /vouchers with idempotency and mutex coalescing` · Líneas estimadas: 275
+
+- [x] **T5.1** — `agent/mutex.ts` (`withChannelLock`)
+  - Ejecutor: agente
+  - Archivos: src/agent/mutex.ts, src/agent/mutex.test.ts
+  - Cumple: VE-R12
+  - Pruebas: dos llamadas concurrentes al mismo canal se serializan; canales distintos no se bloquean entre sí
+  - Depende de: T0.1
+  - Líneas estimadas: 40
+- [x] **T5.2** — `agent/guardrails.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/guardrails.ts, src/agent/guardrails.test.ts
+  - Cumple: AC-R2, AC-R3, AC-R7
+  - Pruebas: recálculo exacto vs `cumulativeAmount` recibido → `amount_rejected` si difiere; delta > `MAX_DELTA_PER_REQUEST_RAW` → `amount_rejected`
+  - Depende de: T1.1
+  - Líneas estimadas: 55
+- [x] **T5.3** — `agent/routes` `POST /vouchers`
+  - Ejecutor: agente
+  - Archivos: src/agent/app.ts (ruta), src/agent/routes/vouchers.ts
+  - Cumple: VE-R1, VE-R2, VE-R6, VE-R9, VE-R10, VE-R11, VE-R13
+  - Pruebas: `X-Gateway-Token` ausente/incorrecto → 401; igual → `reused:true`; mayor → vale nuevo; menor → `stale_reading`
+  - Depende de: T1.2, T5.1, T5.2
+  - Líneas estimadas: 130
+- [x] **T5.4** — Tests de concurrencia y coalescencia
+  - Ejecutor: agente
+  - Archivos: src/agent/routes/vouchers.test.ts
+  - Cumple: escenario 3.2 "dos lecturas concurrentes del mismo canal"; coalescencia de 4.3
+  - Pruebas: N pedidos concurrentes del mismo canal → una sola firma, el mayor de la cola, el resto `reused:true`
+  - Depende de: T5.3
+  - Líneas estimadas: 50
+
+### WU6 — Escalón 2: apertura, recarga y firma de vales
+
+Commit: `feat(stage2): add channel open/top-up CLI, commitment signing, and server verification` · Líneas estimadas: 415
+
+- [x] **T6.1** — `agent/channel.ts` (adaptado: un solo archivo `open|top-up|close-start|refund|state`, por instrucción explícita del encargo de implementación, en vez de `cli/open-channel.ts`+`cli/top-up.ts` separados)
+  - Ejecutor: agente
+  - Archivos: src/cli/open-channel.ts, src/cli/top-up.ts
+  - Cumple: CL-R1, CL-R2
+  - Pruebas: `ChannelPort` fake — `__constructor`/`top_up` invocados con los argumentos correctos; escribe `data/channel-{network}.json`
+  - Depende de: T3.1, T1.4
+  - Líneas estimadas: 100
+- [x] **T6.2** — `agent/signer.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/signer.ts, src/agent/signer.test.ts
+  - Cumple: formato de firma del commitment map (4.3), determinismo ed25519 (RFC 8032)
+  - Pruebas: mismo `amount` firmado dos veces produce la misma firma
+  - Depende de: T0.1
+  - Líneas estimadas: 55
+- [x] **T6.3** — `agent/channel-cache.ts`
+  - Ejecutor: agente
+  - Archivos: src/agent/channel-cache.ts
+  - Cumple: CL-R4, 2.3.5 (el agent corta primero con `depositedRaw` cacheado)
+  - Pruebas: `RpcPort` fake — agotamiento local antes de firmar cuando el acumulado supera el depósito cacheado
+  - Depende de: T1.4
+  - Líneas estimadas: 70
+- [x] **T6.4** — `server/routes/channel.ts` + `server/channel-service.ts` (verificación) (adaptado: verificación hand-rolled con la misma receta que usa el SDK internamente — ver Lote E — no vía `stellar.channel(...)` de `@stellar/mpp/channel/server`)
+  - Ejecutor: agente
+  - Archivos: src/server/routes/channel.ts, src/server/channel-service.ts
+  - Cumple: CL-R4, VP-R1, VP-R2, VP-R3
+  - Pruebas: simulación `prepare_commitment` (fake) + verificación ed25519 + append/fsync antes del 200
+  - Depende de: T2.1, T6.2
+  - Líneas estimadas: 120
+- [x] **T6.5** — Tests firma/agotamiento/persistencia
+  - Ejecutor: agente
+  - Archivos: src/server/channel-service.test.ts
+  - Cumple: escenario "canal agotado" 3.6; VP-R4
+  - Pruebas: firma inválida rechazada; `channel_exhausted` con depósito agotado; reinicio recupera el acumulado del JSONL
+  - Depende de: T6.4
+  - Líneas estimadas: 70
+
+### WU7 — Escalón 2: settle, monitor de `close_start` y cierre
+
+Commit: `feat(stage2): add settle scheduler, close-start monitor, and channel close flow` · Líneas estimadas: 430
+
+- [ ] **T7.1** — `server/settle-scheduler.ts` — **NO IMPLEMENTADO, con motivo**: el único wasm desplegable hoy (spike Part C) no tiene función `settle` (`HostError: Error(WasmVm, MissingValue)` confirmado en vivo). CL-R5 queda sin objeto para este despliegue: no hay forma de cobrar sin cerrar. La mitigación de R3 pasa a ser exclusivamente CL-R6/CL-R7 (cerrar de inmediato ante `close_start`, ver Lote E) tal como indicó el encargo de implementación ("Facts that override the design"). Reintentar solo si se compila `main` del contrato con un toolchain Rust real.
+- [x] **T7.2** — `server/close-monitor.ts` (adaptado: usa `watchChannel()` de `@stellar/mpp/channel/server` + poll de respaldo sobre `getChannelInfo`; `persistence/cursor.ts` NO se usó — `watchChannel()` no expone un hook de cursor incremental, ver Lote E)
+  - Ejecutor: agente
+  - Archivos: src/server/close-monitor.ts
+  - Cumple: CL-R6, CL-R8 (CL-R7 no aplica — ver T7.1)
+  - Pruebas: poll `getEvents` fake con cursor persistido; invariante `balance == deposited - withdrawn` detecta `refund_raced`
+  - Depende de: T2.2, T7.1
+  - Líneas estimadas: 100
+- [x] **T7.3** — `server/channel-service.ts::closeChannel` (adaptado: sin `settle` — ver T7.1 — no cierra "settle sin cerrar" ante trustline faltante, solo bloquea y emite `payment.failed`)
+  - Ejecutor: agente
+  - Archivos: src/server/channel-service.ts (extensión)
+  - Cumple: CL-R9, CL-R10, CL-R11
+  - Pruebas: sin trustline del funder → no cierra, `settle` + `funder_trustline_missing`; balance post-cierre no coincide → `refund_not_received`
+  - Depende de: T7.2, T1.4
+  - Líneas estimadas: 110
+- [x] **T7.4** — `agent/channel.ts close-start|refund` (adaptado: subcomandos del mismo archivo unificado — ver T6.1 — en vez de `cli/close-start.ts`+`cli/refund.ts`)
+  - Ejecutor: agente
+  - Archivos: src/cli/close-start.ts, src/cli/refund.ts
+  - Cumple: 2.3.5 (válvula de escape del funder); R13 (mitigación, cuenta en ledgers)
+  - Pruebas: cuenta regresiva basada en `getLatestLedger` (fake), no en segundos
+  - Depende de: T6.1
+  - Líneas estimadas: 70
+- [x] **T7.5** — Tests de cierre, settle y trustline (settle no aplica — ver T7.1)
+  - Ejecutor: agente
+  - Archivos: src/server/channel-service.test.ts (extensión)
+  - Cumple: escenarios 3.6 (cierre con devolución, funder sin trustline, salida unilateral)
+  - Pruebas: cierre exitoso reparte `settledRaw`/`refundedRaw` correctamente; `close_start` detectado → `channel_closing` en la siguiente lectura
+  - Depende de: T7.3
+  - Líneas estimadas: 90
+
+### WU8 — Verificación humana en testnet (§14)
+
+Commit: `docs: record testnet verification evidence for stage 1 and stage 2` · Líneas estimadas: 0 (evidencia, no código)
+
+- [ ] **T8.1** — §14.1-2: servidor listo y cuentas listas
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.1, §14.2; criterio de éxito Escalón 0
+  - Pruebas: salida de `curl -i` con 402; salida de `npm run preflight` con trustline en ambas cuentas
+  - Depende de: T3.2, T3.4, T0.6
+  - Líneas estimadas: 0
+- [x] **T8.2** — §14.3: un cobro suelto (compuerta de escalón 1)
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: S1-R7 (cierre de escalón 1), §14.3 — **compuerta dura para WU6/WU7**
+  - Pruebas: hash de transacción visible en el explorador; `charge.settled` en stdout; balance XLM del agent sin cambios
+  - Depende de: T8.1
+  - Líneas estimadas: 0
+  - **Cerrado 2026-09-15**: evidencia completa (dos cobros reales en testnet, balances verificados en Horizon) en `## 6. Implementación` → `### T8.2 — evidencia testnet (2026-09-15)`.
+- [ ] **T8.3** — §14.4: cobros repetidos contra consumo simulado
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.4; escenario 3.1 "cobros repetidos"
+  - Pruebas: serie de hashes; suma de cobros igual a `cumulative(N)` con error ≤1 raw unit
+  - Depende de: T8.2
+  - Líneas estimadas: 0
+- [ ] **T8.4** — §14.5-6: canal abierto, depositado, N vales firmados
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia, §7 pregunta 4)
+  - Cumple: §14.5, §14.6; criterio de éxito Escalón 2 (parcial); spike S1 (costo real anotado)
+  - Pruebas: hash + `CHANNEL_CONTRACT` en el explorador; N líneas en el JSONL y cero actividad on-chain durante la ventana de consumo
+  - Depende de: T6.4, T8.2
+  - Líneas estimadas: 0
+- [ ] **T8.5** — §14.7-8: agotamiento y reinicio a mitad de sesión
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.7, §14.8; FT-R4, VP-R4
+  - Pruebas: M2 con `channel_exhausted`, sin tormenta de reintentos; server reiniciado recupera el acumulado máximo del JSONL real
+  - Depende de: T8.4
+  - Líneas estimadas: 0
+- [ ] **T8.6** — §14.9-10: cierre con devolución y salida unilateral
+  - Ejecutor: humano
+  - Archivos: docs/payments-sdd.md (evidencia)
+  - Cumple: §14.9, §14.10; CL-R11; spike S2 confirmado o fallback CL-R7 aplicado; spike S4 (top_up tras close_start)
+  - Pruebas: hash de `close` + delta de balance del funder verificado; hash de `close_start` y de `refund`
+  - Depende de: T7.5, T8.5
+  - Líneas estimadas: 0
+
+### WU9 — Pulido y backlog
+
+Commit: `chore: polish docs, backlog notes, and remaining test coverage` · Líneas estimadas: 80
+
+- [ ] **T9.1** — Backlog y troubleshooting en README
+  - Ejecutor: agente
+  - Archivos: README.md (sección backlog)
+  - Cumple: D10 (fee payer = recipient, atajo conocido), R14 (Windows)
+  - Pruebas: n/a, revisión de lectura
+  - Depende de: T0.3
+  - Líneas estimadas: 40
+- [ ] **T9.2** — Completar cobertura de `node:test`
+  - Ejecutor: agente
+  - Archivos: src/**/*.test.ts (gaps)
+  - Cumple: D9 (tabla 4.7, ~20 tests)
+  - Pruebas: cada fila de la tabla 4.7 tiene al menos un `node:test` asociado
+  - Depende de: T7.5
+  - Líneas estimadas: 40
+- [ ] **T9.3** — Cerrar preguntas abiertas restantes
+  - Ejecutor: pareja
+  - Archivos: docs/sdd/payments-mpp.md (§2.7)
+  - Cumple: preguntas abiertas 2.7 no resueltas en T0.5 (p. ej. #6 x402)
+  - Pruebas: cada pregunta marcada como confirmada o descartada
+  - Depende de: T0.5
+  - Líneas estimadas: 0
+- [ ] **T9.4** — Ensayo completo de Demo Day
+  - Ejecutor: humano
+  - Archivos: — (ensayo)
+  - Cumple: criterios de éxito generales (2.6)
+  - Pruebas: guion de punta a punta corrido una vez más; hashes y capturas siguen vigentes
+  - Depende de: T8.6
+  - Líneas estimadas: 0
+
+### Spikes de día 1
+
+Los cuatro corren el martes 16, 30 minutos cada uno, antes de escribir código de producto (S2 y S3 primero: cambian código que si no se escribe dos veces).
+
+| # | Spike | Ejecutor | Cómo responderla | Bloquea |
+|---|---|---|---|---|
+| S1 | Costo de desplegar y fondear un canal | humano — requiere fees reales de testnet, no hay atajo offline | Desplegar un canal descartable con 1 USDC; leer XLM del funder antes/después y `feeCharged` | Nada de código (D6 ya fija canal reutilizable); alimenta la evidencia de T8.4 y §7 pregunta 4 |
+| S2 | Topics/campos de `close_start` vía `getEvents` | humano — la ejecución real es obligatoria; el agente puede adelantar terreno leyendo el código fuente del contrato `one-way-channel` para una hipótesis de topics antes del spike | `close_start` en un canal descartable + `getEvents` filtrado, imprimiendo topics en XDR | Finaliza la constante `CLOSE_START_EVENT_TOPICS` de T7.2 y la elección CL-R6 vs CL-R7 en T7.1/T7.3; T7.2 se escribe igual con clasificación por candidatos como diseño ya prevé |
+| S3 | Dónde aparece el `txHash` del escalón 1 | agente puede pre-resolverlo leyendo los tipos publicados de `@stellar/mpp` en `node_modules` tras el `npm install` de T0.6 (sin red Soroban); la confirmación empírica final es humana | `JSON.stringify` sobre el resultado del charge, el `Store` y los headers; fallback: hash del sobre firmado o `getEvents` del transfer SEP-41 | Cierra el detalle exacto de T3.2 (el diseño ya deja dos fallbacks documentados, no bloquea escribir el código) |
+| S4 | ¿Acepta `top_up` después de `close_start`? | humano — simula contra un canal descartable ya cerrado (`close_start` llamado); el agente puede leer el contrato Rust del `one-way-channel` para una hipótesis del `require!` sin ejecutar nada | Simular `top_up` sobre el canal de S2 y leer el error de simulación | Solo una línea del runbook en T6.1/T6.3 ("`channel_closing` es terminal, abrir uno nuevo"); no bloquea la implementación |
+
+### Review Workload Forecast
+
+- Estimated changed lines (agente tasks only): ~2570
+- 400-line budget risk: High
+- Chained PRs recommended: Yes
+  - PR1 — WU0 scaffolding (~225 líneas), sin dependencias
+  - PR2 — WU1 shared (~345), depende de PR1
+  - PR3 — WU2 persistencia (~180), depende de PR1
+  - PR4 — WU3 escalón 1 charge server + cliente (~380), depende de PR2, PR3
+  - PR5 — WU4 fail-closed + `/ready` + eventos (~240), depende de PR2, PR4
+  - PR6 — WU5 `POST /vouchers` escalón 1.5 (~275), depende de PR2, PR5 — fin del primer lote
+  - PR7 — WU6a CLI de canal + signer (~155), depende de PR6 y de la compuerta T8.2
+  - PR8 — WU6b channel-cache + verificación server (~260), depende de PR7
+  - PR9 — WU7a settle-scheduler + close-monitor (~160), depende de PR8
+  - PR10 — WU7b closeChannel + CLI de salida unilateral (~270), depende de PR9
+  - PR11 — WU9 pulido (~80), depende de PR10 y de toda la evidencia de WU8
+- Decision needed before apply: Yes — el total (~2570 líneas agente) equivale a 6-11 PRs de a ≤400 líneas repartidos en 8 días; incluso el primer lote (stage 1 + 1.5, PR1-PR6) suma ~1645 líneas. Se necesita confirmar la estrategia de entrega (`ask-on-risk` / `auto-chain` / `single-pr` / `exception-ok`) antes de que `sdd-apply` arranque, para saber si cada PRx de la lista se abre por separado o si se acumulan commits de trabajo en `feat/payments-mpp` y se abre un solo PR-tracker a `main` al final del escalón 2.
+
+### Primer lote para apply
+
+Orden: `T0.1, T0.2, T0.3, T0.4, T1.1, T1.2, T1.3, T1.4, T2.1, T2.2, T3.1, T3.2, T3.3, T3.4, T4.1, T4.2, T4.3, T5.1, T5.2, T5.3, T5.4`.
+
+Todas `agente`, todas sin acceso a testnet real (usan los puertos `ChannelPort`/`RpcPort`/`ChargePort`/`TrustlinePort` con fakes, según 4.1). Cubren escalón 1 completo y escalón 1.5 (`POST /vouchers` contra consumo simulado).
+
+**Condición de corte**: detenerse después de T5.4. No tocar T0.5 ni T0.6 (requieren al compañero del gateway y ejecución real) ni ninguna tarea de WU6/WU7 (escalón 2) hasta que un humano marque **T8.2** — hash de escalón 1 verificado en el explorador. Si T8.2 no está cerrado el jueves 17, avisar al equipo ese mismo día (§13/§15), no el viernes.
+
+**Progreso real (Lote B, 2026-09-15)**: T3.1-T3.4 y T4.1-T4.3 cerrados (ver checkboxes arriba y §6 para detalle, hallazgos del SDK, comandos y desviaciones). Restante del primer lote (T5.1-T5.4, `POST /vouchers`) pendiente para el próximo batch de `sdd-apply`. La compuerta dura de escalón 1 (**T8.2**, humano) sigue sin cerrarse — WU6/WU7 permanecen bloqueadas independientemente de cuántos batches de agente corran antes.
+
+**Progreso real (Lote C, 2026-09-15)**: correcciones de revisión sobre `persistence/` y `shared/` cerradas, y T5.1-T5.4 (`POST /vouchers`, escalón 1.5) cerrados — ver checkboxes arriba y §6 para detalle, hallazgos y desviaciones. La compuerta dura de escalón 1 (**T8.2**, humano) sigue sin cerrarse — WU6/WU7 permanecen bloqueadas.
+
+## 6. Implementación
+
+### Lote A — WU0, WU1, WU2 (2026-09-15)
+
+Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a testnet real. Cubre exactamente `T0.1, T0.2, T0.3, T0.4, T1.1, T1.2, T1.3, T1.4, T2.1, T2.2` — se corta ahí a propósito: son las tres primeras cadenas de PR del *Review Workload Forecast* de §5 (`PR1` scaffolding, `PR2` shared, `PR3` persistencia), entregadas como commits de trabajo sobre `feat/payments-mpp` en vez de tres PRs separados, porque el foco de este lote es dejar la base común lista para que WU3 (escalón 1) pueda apoyarse en ella. No se tocó `T0.5` ni `T0.6` (requieren al compañero del gateway y verificación humana de entorno) ni ninguna tarea de WU3 en adelante.
+
+**WU0 — Scaffolding.** `package.json` con los pines exactos del diseño (`@stellar/mpp@0.7.1`, `@stellar/stellar-sdk@15.1.0`, `mppx@0.6.29`, `viem@2.56.5`), más `zod@4.6.5` (lo que resolvió `npm ls zod` después de instalar `@stellar/mpp`, dentro de su rango `^4.4.3`), `express@5.2.1`, `dotenv@17.4.2` y devDependencies (`typescript@5.9.3`, `@types/node@22.20.2`, `@types/express@5.0.6`). `tsconfig.json` con `erasableSyntaxOnly`, `verbatimModuleSyntax` y `allowImportingTsExtensions` tal como pide 4.6. `.env.example` con cada variable de las tablas 3.9 y 4.4, comentada. `scripts/verify-deps.mjs` (Node puro, sin dependencias) más `README.md` de arranque. Primer test verde en `src/shared/_smoke.test.ts`.
+
+**WU1 — Shared.** `shared/money.ts` (`ceilDiv` y `computeExpectedAmountRaw` en BigInt, más `computeChargeDeltaRaw` para el delta de escalón 1 — es la misma función de precio que pide S1-R5). `shared/messages.ts` con los schemas zod de mensaje 1 y mensaje 2 (`z.discriminatedUnion` por `status`). `shared/reasons.ts` (tabla `REASONS`, `PaymentError`, `retryableFor`/`statusFor`) y `shared/events.ts` (envelope + `emit()` a stdout; el webhook de `BACKEND_EVENTS_URL` queda para T4.2). `shared/retry.ts` (backoff con jitter completo, `RETRY_MAX_ATTEMPTS=4`, tope `RETRY_MAX_DELAY_MS=4000`) y `shared/stellar/{network,keys,trustline,explorer}.ts` (validadores de formato G/C/S y hex 64/128, passphrases de red, `buildExplorerUrl`; `trustline.ts` define el tipo `TrustlinePort` porque la verificación real necesita RPC y esa integración es de un work unit posterior).
+
+**WU2 — Persistencia.** `persistence/voucher-log.ts`: log JSONL append-only con `fs.writeSync` + `fs.fsyncSync` antes de responder, replay al abrir que reconstruye el índice por canal (el máximo, no el último), línea final corrupta → WARN + truncado + se sigue sirviendo, línea corrupta en el medio → `{status: "corrupt", reason: "voucher_log_corrupt"}`. `persistence/cursor.ts`: escritura atómica `.tmp` + `fsync` + `rename` para el cursor del monitor de eventos. Todos los tests de este work unit escriben en un directorio real creado con `fs.mkdtempSync`, sin mocks de `fs`, tal como exige 4.7.
+
+**Comandos ejecutados (resultado final, después de corregir el bug de test descrito abajo):**
+
+| Comando | Resultado |
+|---|---|
+| `npm install` | 149 paquetes, sin `--legacy-peer-deps` |
+| `npm run verify:deps` | `single resolved version for every pinned package` — cero duplicados de `@stellar/stellar-sdk` y `mppx`, no hizo falta `overrides` |
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 71/71 tests en verde (9 WU0 + 50 WU1 + 12 WU2) |
+
+**Commits:**
+
+- `8de759f` — `feat: scaffold payments-mpp package with pinned dependencies`
+- `20484be` — `feat(shared): add pricing math, message schemas, and reason taxonomy`
+- `f01f612` — `feat(persistence): add append-only voucher log and event cursor`
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`.gitattributes` nuevo** (`* text=auto eol=lf`): no estaba en el diseño. Git avisaba "LF will be replaced by CRLF" en Windows; se agregó en el commit de scaffolding para fijar finales de línea LF en el repo, evitando diffs ruidosos entre máquinas del equipo (coherente con R14).
+2. **`typescript`, `@types/node`, `@types/express` fijados en la última versión de la serie mayor que ya usaba el diseño (5.x / 22.x / 5.x), no en el último publicado en npm.** `npm view typescript version` devuelve `7.0.2`: TypeScript 7 es la reescritura en Go (compilador nativo), publicada después de escrito el diseño, y saltar dos versiones mayores en la primera semana de un proyecto que recién arranca con `erasableSyntaxOnly` (función de TS 5.8+) es un riesgo que nadie pidió. Se fijó `typescript@5.9.3` (la última 5.x), `@types/node@22.20.2` (última 22.x, coincide con `engines.node`) y `@types/express@5.0.6`. Verificado empíricamente: `erasableSyntaxOnly` funciona con `typescript@5.9.3`.
+3. **`.env.example` más completo que el bloque literal de la sección 4.4 del diseño.** El diseño muestra un `.env.example` de ejemplo que omite variables con default (`RPC_HEALTH_TIMEOUT_MS`, `CLOSE_MONITOR_LOOKBACK_LEDGERS`, `CLOSE_ASSERT_ATTEMPTS`, `CLOSE_ASSERT_INTERVAL_MS`, `INIT_RETRY_INTERVAL_MS`, `METER_REPORT_INTERVAL_MS`). La prueba de T0.2 pide explícitamente "cada variable de las tablas 3.9 y 4.4", así que se priorizó la tabla completa sobre el bloque de ejemplo del diseño, que era ilustrativo.
+4. **`MPP_SECRET_KEY` aparece con el mismo nombre en la tabla de variables de `server` y en la de `agent` (diseño 4.4).** Si los dos procesos corren desde el mismo `.env` en la misma carpeta — que es como está armado hoy el repo, sin `.env` separado por rol — `dotenv` solo se queda con el último valor y el otro proceso pierde su clave. Se dejó documentado en `.env.example` tal cual lo define el diseño porque resolverlo (¿nombres separados? ¿un `.env` por proceso?) es una decisión de `config/env.ts`, que es T3.1 y no está en este lote. **Punto abierto para quien tome T3.1.**
+5. **Glob de tests ampliado**: `"test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\""` en vez del literal `"node --test \"src/**/*.test.ts\""` del diseño. `scripts/verify-deps.mjs` es JS plano a propósito (4.4: nada de TS ahí para no depender del paso de chequeo en tooling), y su test (`verify-deps.test.mjs`) necesita ejecutarse igual. Sin este cambio, `npm test` nunca corre esa suite.
+6. **`ceilDiv` y el precio no exponen una única función `ceilDiv(bytes)` como sugiere la nota de lectura de tareas, sino `ceilDiv(numerador, denominador)` genérica más `computeExpectedAmountRaw(bytes, price)` que la usa.** Es fiel a AC-R2 (`ceilDiv(cumulativeBytes * PRICE_PER_MIB_RAW, 1048576n)`); se separó para poder testear `ceilDiv` con casos de borde propios sin atar cada caso a un precio fijo.
+7. **No se corrió `npm audit fix`.** `npm audit` reporta 4 vulnerabilidades "high" en `axios`/`toml`, transitivas de `@stellar/stellar-sdk@15.1.0`. El fix sugerido implica subir a `@stellar/stellar-sdk@17.1.0`, que rompe el pin exacto exigido por el diseño (D1/D2, R4) y por T0.1. Se deja sin tocar y registrado acá para que el equipo decida conscientemente si acepta el riesgo hasta que el pin se revise.
+
+**Descubrimientos no obvios** (guardados también en Engram, tipo `discovery`): TypeScript 7 ya está publicado como `latest` en npm (reescritura en Go); zod resuelve una única versión (`4.6.5`) en todo el árbol pese a que tres paquetes distintos lo declaran (`@stellar/mpp`, `mppx`, `viem` vía `abitype`); `npm ls <pkg> --all --json` en Windows necesita `shell: true` en `execFileSync` porque `npm` es un `.cmd`, no un binario nativo — sin eso, `verify-deps.mjs` fallaría en las máquinas del equipo aunque pasara en CI Linux.
+
+**Bug propio encontrado y corregido durante este lote:** el primer test de "excede `Number.MAX_SAFE_INTEGER`" en `money.test.ts` afirmaba que el *monto resultante* superaba `Number.MAX_SAFE_INTEGER` usando `cumulativeBytes = MAX_SAFE_INTEGER + 10n`, pero con `PRICE_PER_MIB_RAW = 10_000n` el monto resultante es ~86 veces más chico que los bytes de entrada, así que no lo superaba — el test estaba mal, no el código. Se corrigió calculando `hugeBytes` a partir del monto objetivo (`(MAX_SAFE_INTEGER * MIB) / PRICE + MIB`) para que el escenario de la spec ("monto derivado supera `Number.MAX_SAFE_INTEGER`") se cumpla de verdad.
+
+**Puntos abiertos para el próximo lote (WU3 en adelante):**
+
+- Resolver la colisión de `MPP_SECRET_KEY` entre `server` y `agent` en `config/env.ts` (T3.1) — ver desviación 4.
+- `T0.5` (acuerdos con el gateway) y `T0.6` (verificación de Node y `verify:deps` en las máquinas del equipo) siguen pendientes, son `pareja`/`humano` y no se tocaron.
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre `T8.2`.
+- Vulnerabilidades transitivas de `axios`/`toml` sin resolver (desviación 7) — decisión pendiente del equipo, no bloquea WU3-WU5.
+
+### Correcciones de revisión aplicadas en lote B (2026-09-15)
+
+Antes de tocar código de WU3, se aplicaron tres hallazgos de una revisión de lote A sobre archivos ya cerrados (`src/shared/messages.ts`, `.env.example`):
+
+1. **`message2UnsignedSchema` no ataba `retryable` a `REASONS`.** Se agregó un `.refine()` que exige `retryable === retryableFor(reason)`, y `reasonSchema` ahora se deriva de `isReason()` (reasons.ts) en vez de repetir la lista de claves a mano — las dos tablas ya no pueden desincronizarse. Se agregó `buildUnsigned(reason, fields)` como única forma de construir un envelope `unsigned`: deriva `retryable` y el status HTTP de `REASONS`, nunca a mano. Todo el código de este lote (charge-service.ts, require-ready.ts, boot.ts vía `shared/http.ts::unsignedResponse`) pasa exclusivamente por ahí.
+2. **`sessionId`/`meterReadingId` eran `required` en la rama `unsigned`**, pero `requireReady` (FC-R5) responde antes de que exista un body que parsear, y el camino de fallo de validación de M1 (VE-R2) puede no tener body usable tampoco. Ahora son `.nullable()` (no `.optional()`) solo en la rama `unsigned` — se emite `null`, nunca `""` ni un placeholder como `"unknown"`. La rama `signed` no cambió: un vale firmado siempre tiene sesión y lectura real detrás.
+3. **`.env.example` definía `MPP_SECRET_KEY`, `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` dos veces** (una por rol); con un único `.env` compartido, `dotenv` se queda con el último valor y un proceso pisaba la clave del otro sin avisar. `MPP_SECRET_KEY` se sacó del bloque `agent` (confirmado como servidor-only contra el código fuente instalado de `mppx`, ver Spike S3 más abajo — esto además zanja el punto abierto de la desviación 4 del lote A). `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW` pasaron al bloque `shared`, definidos una sola vez. La tabla 4.4 del diseño (arriba en este mismo documento) se corrigió para reflejar lo mismo — antes tenía la misma duplicación que el `.env.example`.
+
+Commit separado: `fix(shared): tie M2 retryable to REASONS and fix env var collisions` (`37aa16e`), antes del commit de WU3.
+
+### Lote B — WU3, WU4 (2026-09-15)
+
+Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a testnet real. Cubre exactamente `T3.1, T3.2, T3.3, T3.4, T4.1, T4.2, T4.3` — escalón 1 completo (cobro puntual patrocinado) más arranque fail-closed, `/health`/`/ready` y el webhook opcional de eventos. No se tocó WU5 (`POST /vouchers`) ni ninguna tarea de WU6/WU7 (compuerta de **T8.2** sigue cerrada).
+
+**WU3 — Escalón 1: charge server + cliente headless.** `config/env.ts` valida por rol sobre un `sharedSchema.extend()` común; el schema del agent no incluye `MPP_SECRET_KEY` (amendment del orquestador, confirmada contra el SDK real — ver Spike S3). `server/charge-service.ts` + `server/routes/charge.ts` implementan el puerto `ChargePort` (`challenge` | `settled` | `failed`) y lo traducen a HTTP: el 402 pasa sin tocar, un `settled` agrega `payment:{txHash,explorerUrl,network}` al body y emite `charge.settled`, un `failed` construye el envelope `unsigned` vía `shared/http.ts::unsignedResponse` y emite `payment.failed`. La ruta rastrea "consumo simulado" con un `Map<sessionId, bigint>` en memoria y solo avanza el contador cuando `ChargeResult.settled === true` — nunca a partir del status HTTP, porque `amount_rejected`/`stale_reading` también son 200 (FT-R6). `agent/charge-client.ts` es el cliente real (`@stellar/mpp/charge/client`, `polyfill:false` — ver Spike S3) detrás de un `ChargeClientPort` que un fake puede sustituir sin tocar red. `scripts/preflight.ts` verifica la trustline de USDC contra **Horizon**, no Soroban RPC (ver Spike S3). `server/app.ts` y `server/main.ts` no se armaron en este work unit — dependen del `FailClosedBoot` de WU4 y se muestran ahí para que el commit de WU3 compile y pase tests por sí solo (113/113 antes de agregar WU4).
+
+**WU4 — Fail-closed, `/ready` y eventos.** `config/boot.ts::createFailClosedBoot` es el wrapper genérico de re-arme (primer intento siempre corre; los siguientes se acotan a `retryIntervalMs`; llamadas concurrentes comparten un único intento en vuelo). `buildServerChargeInstance` es el `ChargePort` real: probe de salud de Soroban RPC acotado a `RPC_HEALTH_TIMEOUT_MS` (FC-R4) y luego `Mppx.create` + `stellar.charge({feePayer, store: Store.memory()})`. `UnavailableReason` agrega `config_invalid`/`voucher_log_corrupt` como razones de alarma que **nunca** viajan en M2; `toM2Reason()` las traduce a `internal_error` para cualquier 503 de ruta de pago, mientras `/ready` sigue mostrando la razón específica. `requireReady` re-arma (respetando el throttle) y, si el mismo intento tiene éxito, sirve la misma request que lo disparó — el escenario "recuperación sin reinicio" de la spec tal cual. `shared/events.ts::createWebhookSink` reusa `shared/retry.ts::withRetry` (mismo primitivo que RPC/agent→server) para el POST fire-and-forget con cola acotada.
+
+#### Spike S3 (parte offline) — API real de `@stellar/mpp`/`mppx` encontrada
+
+Resuelto leyendo `node_modules/@stellar/mpp/{README.md,dist/**/*.d.ts,dist/charge/server/Charge.js}` y `node_modules/mppx/src/{server/Mppx.ts,Receipt.ts,Store.ts,client/Mppx.ts}` después del `npm install` — sin red Soroban, tal como preveía la tarea:
+
+1. **`MPP_SECRET_KEY` no es una Stellar `Keypair`.** `Mppx.create({ secretKey, methods })` (de `@stellar/mpp/charge/server`, re-exportado de `mppx/server`) usa `secretKey` para HMAC-firmar los desafíos 402 (`Challenge.verify`) — es un string genérico no vacío, no una clave Stellar. La spec 3.9 decía "parseable como `Keypair`"; eso no coincide con el SDK real y el schema de `config/env.ts` sigue al SDK, no a la spec. El agent nunca lo lee — es exclusivo del `server` (amendment del orquestador confirmada empíricamente, no solo por instrucción).
+2. **El fee payer/sponsor se configura aparte, con `feePayer.envelopeSigner`.** `stellar.charge({ recipient, currency, network, feePayer: { envelopeSigner: Keypair|string } })` es lo que activa el modo patrocinado: el challenge incluye `methodDetails.feePayer:true`, el cliente firma únicamente las authorization entries con una cuenta placeholder de ceros, y el servidor reconstruye la transacción con `envelopeSigner` como source, la firma y la transmite. `envelopeSigner` es el valor de `FEE_PAYER_SECRET` (D10: en la demo es la misma cuenta que `STELLAR_RECIPIENT`, pero son dos variables de entorno separadas porque el `Keypair` de firma de envelope y el string usado como `recipient` en `stellar.charge()` son parámetros distintos del SDK).
+3. **El `txHash` sale del header `Payment-Receipt`, ya calculado por el SDK — ningún fallback de diseño hizo falta.** El diseño proponía dos fallbacks (hash del sobre firmado, o `getEvents` del transfer SEP-41) para el caso de que el SDK no expusiera el hash. Resultó innecesario: leyendo `Charge.js` compilado, la rama `case 'transaction'` computa `const txHash = broadcastInnerTx.hash().toString('hex')` (exactamente el fallback A del diseño, ya hecho por el SDK) y lo devuelve como `Receipt.from({ reference: sendResult.hash, ... })`. `result.withReceipt(response)` es una función pura de `respondReceipt` (confirmado en `Transport.ts`: solo clona headers y agrega `Payment-Receipt`, sin reenviar ni volver a verificar nada) — así que se puede invocar dos veces sin efecto secundario: una vez con una `Response` descartable solo para leer `Receipt.fromResponse(probe).reference`, y una segunda vez con el body real (`{payload, payment}`) ya con el `txHash` adentro. No hizo falta `AsyncLocalStorage` ni escuchar `onPaymentSuccess`.
+4. **`Mppx.create()` del lado cliente muta `globalThis.fetch` por default.** `mppx/client`'s `create()` acepta `polyfill: false` para devolver un `mppx.fetch` con el mismo manejo automático de 402 pero sin tocar el fetch global del proceso — necesario acá porque el mismo proceso Node corre `node:test`, que también usa `fetch` global; sin `polyfill:false` un test de `agent/charge-client.ts` habría contaminado el resto de la suite.
+5. **La trustline de USDC vive en Horizon, no en Soroban RPC.** `rpc.Server.getAccount()` (Soroban RPC) no expone balances/trustlines; esos son un concepto de la capa clásica. `scripts/preflight.ts` usa `Horizon.Server` (con la URL de `HORIZON_URLS`, exportada por `@stellar/mpp`) y revisa `account.balances` buscando `asset_code === "USDC"`.
+
+**Comandos ejecutados (resultado final):**
+
+| Comando | Resultado |
+|---|---|
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 131/131 tests en verde |
+| `npm run verify:deps` | `single resolved version for every pinned package` |
+| `node src/server/main.ts` sin `.env` (smoke manual) | escucha en `:8080` de inmediato; `GET /health` → 200 `{"status":"alive"}`; `GET /ready` → 503 `{"status":"unavailable","reason":"config_invalid","detail":"invalid or missing environment variable(s): PRICE_PER_MIB_RAW, STELLAR_RECIPIENT, MPP_SECRET_KEY, FEE_PAYER_SECRET", ...}`; `GET /paid-resource` → 503 con `Retry-After: 5` y envelope `unsigned`/`internal_error`/`retryable:true` — ningún valor de variable aparece en la respuesta |
+| `node src/agent/main.ts` sin `.env` (smoke manual) | falla limpio: `{"level":"error","msg":"invalid agent configuration","detail":"invalid or missing environment variable(s): PRICE_PER_MIB_RAW, GATEWAY_TOKEN, SIGNER_SECRET"}`, `exitCode=1`, sin stack trace |
+
+**Commits:**
+
+- `37aa16e` — `fix(shared): tie M2 retryable to REASONS and fix env var collisions` (correcciones de revisión, antes de WU3)
+- `2629b85` — `feat(stage1): add 402 charge server and headless agent client` (WU3, 113/113 tests standalone)
+- `c946dd0` — `feat: add fail-closed boot, readiness middleware, and webhook events` (WU4, 131/131 tests)
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`server/app.ts` y `server/main.ts` se armaron enteros en el commit de WU4, no en el de WU3**, aunque el diseño lista `server/app.ts` como archivo de T3.2. Tal como está escrito, `app.ts` ensambla la ruta de cobro *detrás* de `requireReady`/`/health`/`/ready`, que son de T4.1 — separarlo en dos versiones de `app.ts` (una sin fail-closed para WU3, otra con fail-closed para WU4) hubiera significado reescribir el mismo archivo dos veces sin ganar nada real. Se verificó explícitamente que el resto de WU3 (env.ts, http.ts, charge-service.ts, routes/charge.ts, agent/*, preflight) compila y pasa 113/113 tests por sí solo, sin `server/app.ts` ni `config/boot.ts`, antes de escribir WU4.
+2. **`FEE_PAYER_SECRET` se mantiene como variable separada de `MPP_SECRET_KEY`**, aunque D10 dice "una sola clave... recibe USDC y patrocina comisiones". La razón es de API, no de decisión de producto: `stellar.charge()` recibe `recipient` (string público) y `feePayer.envelopeSigner` (`Keypair`/secreto) como parámetros distintos — no existe un único parámetro "la misma cuenta cobra y paga fee". D10 sigue cumplida en la demo poniendo el mismo secreto real en ambas variables; el código simplemente necesita nombrarlas por separado porque el SDK las pide por separado.
+3. **`config/boot.ts::createServerBoot` usa un `retryIntervalMs` fijo (10000 ms, el default del diseño) en vez de leer `INIT_RETRY_INTERVAL_MS` del propio env parseado.** Leer el valor recién confirmado por el primer parseo exitoso para regular reintentos *futuros* de ese mismo parseo es circular (¿con qué intervalo se reintenta un parseo que todavía no se sabe si va a tener un `INIT_RETRY_INTERVAL_MS` custom?). Se documenta como límite conocido: un operador que fije un `INIT_RETRY_INTERVAL_MS` distinto de 10000 no lo ve reflejado en el throttle de reintento de *configuración* inválida (sí se respeta una vez que el proceso ya arrancó ready y se está reintentando por RPC caído, porque ahí el valor parseado ya existe). No bloquea el escalón 1.
+4. **`scripts/preflight.ts` no estaba en el glob de `npm test`.** El diseño (4.4) solo agrega `scripts/**/*.test.mjs` al glob (para `verify-deps.test.mjs`); `preflight.test.ts` es `.ts`, no `.mjs`. Se amplió el glob a `"scripts/**/*.test.mjs" "scripts/**/*.test.ts"`. Mismo patrón que la desviación 5 del lote A, mismo motivo: sin esto, `npm test` nunca corre esa suite.
+5. **El monto del cobro de escalón 1 usa un `Map` en memoria por `sessionId` para simular consumo creciente**, en vez de no tener ningún estado. La spec (3.1, escenario "cobros repetidos") pide que `amount = cumulative(now) - cumulative(previous)`; sin persistir *algún* `previous` entre requests HTTP independientes, esa resta no tiene con qué compararse. Se documentó explícitamente como alcance de demo (nunca un usuario/sesión real, OS-R4): si no se pasa `?sessionId=`, todas las requests comparten una clave `"default"`.
+6. **No se implementó el chequeo de "voucher log no abrible" de FC-R3** (uno de los tres motivos de `unavailable` que pide la spec) — el voucher log todavía no se conecta a `config/boot.ts` en este lote porque su primer consumidor real es WU5 (`POST /vouchers` del agent) y WU6 (verificación de vales del server). `UnavailableReason` ya incluye `voucher_log_corrupt` para cuando se cablee. Los otros dos motivos de FC-R3 (env inválido, RPC caído) sí están implementados y probados.
+
+**Descubrimientos no obvios** (ver también Spike S3 arriba; guardados en Engram tipo `discovery`): `mppx` se distribuye con su código fuente TypeScript además de los `.d.ts`/`.js` compilados (`exports["."]. src`), así que se pudo leer la implementación real (`Charge.js`, `Mppx.ts`, `Transport.ts`) en vez de inferir comportamiento solo de los tipos — así se descubrió que `withReceipt()` es puro y que el `txHash` ya viene resuelto, evitando escribir cualquiera de los dos fallbacks que el diseño había dejado preparados. `mppx` también trae un middleware Express propio (`mppx/express`) con el mismo patrón de bridge Express↔Fetch que se implementó a mano en `routes/charge.ts` — no se adoptó porque no expone el `txHash` de la receipt al handler (solo lo adjunta como header), pero confirma que el enfoque manual es el mismo que usan los mantenedores del SDK.
+
+**Puntos abiertos para el próximo lote (WU5 en adelante):**
+
+- WU5 (`POST /vouchers`, mutex por canal, guardrails) es la siguiente pieza de escalón 1.5 — sigue sin tocar.
+- Cablear el chequeo de voucher log en `config/boot.ts` (FC-R3, desviación 6) cuando WU5/WU6 conecten la persistencia al arranque.
+- Revisar si `INIT_RETRY_INTERVAL_MS` debería aplicarse también al throttle de reintento de configuración inválida (desviación 3) — hoy es un valor fijo de 10s.
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre **T8.2**.
+
+**Pasos para que un humano cierre T8.2 (hash de escalón 1 en el explorador, gate dura de WU6/WU7):**
+
+1. Desplegar/confirmar las dos cuentas de testnet: una para `STELLAR_RECIPIENT`/`FEE_PAYER_SECRET` (puede ser la misma cuenta, D10) y otra para `SIGNER_SECRET` (el funder/agent). Fondear ambas con XLM del faucet de testnet (`https://friendbot.stellar.org?addr=<G...>`).
+2. Crear la trustline de USDC en **ambas** cuentas contra `USDC_SAC_CONTRACT` (default `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`, testnet) — con `stellar-cli` o Freighter. R1/CL-R12 existen exactamente por este paso.
+3. `cp .env.example .env` y completar: `STELLAR_RECIPIENT`, `MPP_SECRET_KEY` (cualquier string no vacío, no es una clave Stellar — ver Spike S3 punto 1), `FEE_PAYER_SECRET` y `SIGNER_SECRET` (secretos `S...` de las cuentas del paso 1), `PRICE_PER_MIB_RAW` (ej. `10000`), `GATEWAY_TOKEN` (cualquier string no vacío). Dejar `CHANNEL_CONTRACT`/`COMMITMENT_PUBKEY`/`FUNDER_ACCOUNT`/`COMMITMENT_SECRET` vacíos (son de escalón 2).
+4. `npm run preflight` — confirmar que no hay WARN de trustline faltante (si lo hay, volver al paso 2).
+5. Terminal 1: `npm run server` — esperar la línea `payments-mpp server listening on :8080` y confirmar `curl -s http://127.0.0.1:8080/ready` devuelve `{"status":"ready",...}` (puede tardar unos segundos: la primera carga de `@stellar/mpp`/`@stellar/stellar-sdk` es pesada).
+6. Confirmación rápida del checklist §14.1: `curl -i http://127.0.0.1:8080/paid-resource` sin credencial → debe devolver `402` con el challenge de MPP. Nota (Lote D): `?cumulativeBytes=<n>` (opcional, junto con `?sessionId=`) fija el consumo acumulado simulado de la request — sirve para la evidencia de T8.3 (§14.4, "cobros repetidos"); un valor que no sea entero no negativo es `400`, y un valor que no avanza sobre el último facturado para esa sesión (incluida una repetición exacta) es `200` con envelope M2 `stale_reading`, sin intento de cobro — nunca un error 500.
+7. Terminal 2: `npm run agent` — hace exactamente un cobro y termina. La salida esperada es una línea `{"level":"info","msg":"stage 1 purchase settled","txHash":"...","explorerUrl":"...","network":"stellar:testnet"}`. (`npm run agent:serve`, agregado en el Lote D, deja el agent corriendo como servidor de `POST /vouchers` para escalón 1.5 — no es el modo que pide esta evidencia de T8.2.)
+8. Pegar en `docs/payments-sdd.md` (evidencia §14.3): el `txHash` y el `explorerUrl` de la salida del paso 7, más la línea `charge.settled` que imprime la Terminal 1 (stdout del server), y confirmar en el explorador (`stellar.expert`) que la transacción existe y que el balance USDC de `STELLAR_RECIPIENT` aumentó. Confirmar también que el balance XLM de la cuenta de `SIGNER_SECRET` no cambió (S1-R3) comparando el balance antes/después con `stellar-cli` o el explorador.
+9. Marcar **T8.2** como `[x]` en la sección de tareas (§5, WU8) recién cuando los tres elementos de evidencia (hash visible, `charge.settled` en stdout, balance XLM del agent sin cambios) estén confirmados — no antes, y no basta con que los tests unitarios estén en verde (S1-R7 lo dice explícitamente).
+
+### Lote C — correcciones de revisión y WU5 (2026-09-15)
+
+Ejecutado por `sdd-apply` en modo estándar (sin TDD estricto), sin acceso a testnet real. Cubre las cinco correcciones de la revisión adversarial sobre `persistence/` y `shared/`, más `T5.1-T5.4` completo (`POST /vouchers`, escalón 1.5 contra consumo simulado).
+
+**Correcciones de revisión.**
+
+1. **`persistence/voucher-log.ts` (MAJOR)** — tres bugs relacionados. `append()` escribía `line + "\n"` con un solo `fs.writeSync` ignorando `bytesWritten`; ahora hace loop hasta escribir el buffer completo. `open()` no verificaba que el archivo terminara en `"\n"` antes de devolver el fd de append: si el último registro válido no tenía newline final (p. ej. un proceso murió justo después del `writeSync` pero antes del siguiente append), el próximo append se pegaba al anterior, el caller respondía `200 signed`, y al reabrir esa línea pegada quedaba corrupta-y-última, así que el archivo entero se truncaba — se perdían los dos vales. Fix: `open()` ahora detecta un archivo no vacío sin `"\n"` final y lo repara antes de devolver el fd (WARN `voucher_log_missing_trailing_newline`). Además, el `fs.truncateSync` que descartaba una línea final corrupta ahora primero mueve esos bytes a un sidecar `<log>.corrupt-<timestamp>-<nonce>` (WARN `voucher_log_trailing_line_discarded`) en vez de tirarlos: la cola corrupta es evidencia forense, no basura. Pruebas nuevas: archivo sin newline final → append → reapertura conserva ambos vales; línea final corrupta va al sidecar y el registro válido más alto sobrevive; archivo vacío se abre limpio; una línea con acumulado MENOR escrita fuera de orden en disco nunca hace retroceder el índice.
+2. **`shared/retry.ts` (MINOR)** — solo los sleeps estaban acotados, no el tiempo total de una llamada (una llamada colgada podía consumir todo el intervalo del medidor sin que `withRetry` lo notara). Se agregaron `deadlineMs` (chequeado antes de cada intento y antes de cada sleep) y `attemptTimeoutMs` (acota cada intento individual con una carrera contra un timer), más una nueva `RetryDeadlineExceededError`. Se corrigió además que `RETRY_MAX_DELAY_MS` (4000ms) era inalcanzable bajo la configuración por default (4 intentos, base 250ms, factor 2 → el sleep más largo real es 1000ms en el intento 2, muy por debajo de 4000): se bajó el tope a 1000ms, exactamente el techo natural de la secuencia documentada 250/500/1000, y se corrigió el comentario obsoleto de "~5,5s peor caso" (matemáticamente nunca fue así con esos parámetros; el peor caso real de los sleeps es ~1,75s, y ahora `deadlineMs`/`attemptTimeoutMs` son los que de verdad acotan el tiempo total end-to-end, no la aritmética del backoff). Pruebas nuevas para deadline (antes del primer intento y antes de un sleep) y para el timeout por intento.
+3. **`shared/messages.ts` (MINOR)** — `rawAmountSchema` aceptaba ceros a la izquierda (`"007"`) y no acotaba el máximo i128; ahora exige `/^(0|[1-9]\d*)$/` y `<= 2n**127n - 1n` (con el mismo guard de re-chequeo de formato antes de `BigInt()` que ya usaba `config/env.ts`, para no convertir un fallo de regex en una `SyntaxError` cruda). `message1Schema` es ahora `.strict()` (VE-R2: una clave desconocida es `400`, nunca se ignora en silencio). `observedAt` acepta `z.iso.datetime({ offset: true })` en vez de exigir solo UTC. Nit de la revisión: se dedupe `NETWORKS` y el chequeo de contract id importando `shared/stellar/network.ts` y `shared/stellar/keys.ts::isStellarContractId` en vez de redeclararlos.
+4. **`persistence/cursor.ts` (MINOR)** — `readCursor` devolvía `undefined` en silencio ante JSON inválido o un shape que no matchea el schema; ahora emite un WARN estructurado (mismo formato que `voucher-log.ts`) en los tres casos: JSON inválido, shape inválido, y un nuevo caso — cursor de un canal distinto al esperado (`expectedChannel`, parámetro opcional nuevo). Esto último previene que el monitor de `close_start` (WU6) siga un `lastLedger` que no corresponde al canal activo si `DATA_DIR` se reusa entre canales.
+5. **Nit de fixtures** — `voucher-log.test.ts` y `cursor.test.ts` usaban `"CB1234567890"` (13 caracteres) como canal; ahora usan un contract id de 56 caracteres con forma real (`C` + 55 caracteres `[A-Z2-7]`), igual que el resto de la suite.
+
+**WU5 — `POST /vouchers` (escalón 1.5).** Cuatro archivos nuevos en `src/agent/`: `mutex.ts` (`createChannelMutex`, T5.1) es una cadena de promesas por canal en un `Map`, sin dependencia externa — dos llamadas al mismo canal se serializan, canales distintos nunca se bloquean entre sí, y un fallo en una llamada nunca envenena la cadena para la siguiente. `guardrails.ts` (`checkGuardrails`, T5.2) recalcula `computeExpectedAmountRaw` y exige igualdad exacta contra `cumulativeAmount` (AC-R2/AC-R3), y rechaza un delta contra el último acumulado firmado que supere `MAX_DELTA_PER_REQUEST_RAW` (AC-R7). `signer.ts` es la desviación documentada que pidió el encargo: el firmante ed25519 real (`COMMITMENT_SECRET`, XDR de canal) es trabajo de WU6 y necesita un canal real — `SignerPort` define el puerto (`sign({channel, network, cumulativeAmount}) -> {signature, commitmentPubkey}`) y `createFakeSigner()` es una implementación determinística (sha512/sha256, nunca el SDK) que preserva la propiedad de determinismo de ed25519 (RFC 8032) de la que depende la idempotencia (VE-R9) y la coalescencia. `src/agent/routes/vouchers.ts` (T5.3, T5.4) es el endpoint en sí, dividido en dos capas como `server/charge-service.ts` + `routes/charge.ts`: `createVoucherService` es lógica pura (mutex + coalescencia + guardrails + firma + persistencia + evento `usage.voucher_signed`) y `createVouchersRoute` es el adaptador Express (token, schema, mapeo de status). La tabla de idempotencia (VE-R9/VE-R10/VE-R11) se resuelve comparando contra `voucherLog.getHighest(channel)`: igual → `reused:true` sin nueva línea; mayor → nuevo vale, reemplaza al anterior; menor → `stale_reading`, `retryable:false`, nada se firma o persiste. La coalescencia (diseño 4.3) agrupa en un `Map<channel, PendingEntry[]>` toda request que llega mientras el mutex del canal ya tiene una ejecución en curso; al liberarse el lock se clasifica cada miembro del batch (igual/menor/rechazado se resuelven individualmente; los candidatos válidos — mayor al anterior y con guardrails en verde — compiten por el máximo) y se firma **una sola vez** por el máximo, distribuyendo ese mismo vale a los demás candidatos con `reused:true`. El cross-check de monto usa exclusivamente `buildUnsigned()` para las respuestas sin firmar, y el status HTTP sale de `REASONS` (200 para todos los resultados de negocio de esta ruta; 503 solo si un error inesperado del signer/voucherLog cae en `internal_error`, que nunca debería pasar con el fake signer). `remaining` sale de un `ChannelDepositPort` inyectable (`createStaticDepositPort`, default = máximo i128, "depósito prácticamente ilimitado" para esta etapa) — el tracker real respaldado por el contrato (`agent/channel-cache.ts`) es WU6.
+
+**FC-R3 (desviación 6 del Lote B, cerrada).** `config/boot.ts` agrega `buildAgentVouchersInstance(env, deps)` y `createAgentBoot(options)`, espejando `buildServerChargeInstance`/`createServerBoot`: abre el voucher log del agent y, si `VoucherLog.open()` devuelve `status: "corrupt"`, la instancia queda `unavailable` con `reason: "voucher_log_corrupt"` — exactamente la condición de FC-R3 que quedó sin cablear en el Lote B porque su primer consumidor real era WU5. `agent/app.ts` ahora recibe `{ boot: FailClosedBoot<VoucherService>, gatewayToken }`, monta `/vouchers` detrás de `requireReady` (reusa `server/middleware/require-ready.ts`, que ya era genérico) y lee la instancia viva de `boot.getState()` en cada request (mismo patrón que `createLiveChargePort` en `server/app.ts`), para que un re-arme (FC-R8) se recoja sin volver a registrar la ruta.
+
+**Comandos ejecutados (resultado final):**
+
+| Comando | Resultado |
+|---|---|
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 182/182 tests en verde (131 antes del Lote C; +16 en `persistence`/`shared` por las correcciones de revisión, +35 nuevos entre `agent/mutex.test.ts`, `agent/guardrails.test.ts`, `agent/signer.test.ts`, `agent/routes/vouchers.test.ts`, `agent/app.test.ts` y `config/boot.test.ts`) |
+| `npm run verify:deps` | `single resolved version for every pinned package` |
+
+**Commits:**
+
+- `d74a4ec` — `fix(persistence): guard voucher log against glued lines and lost tail` (hallazgo 1)
+- `522a6ff` — `fix(shared): harden M1 schema, retry deadline and cursor diagnostics` (hallazgos 2-5)
+- (WU5 y docs: ver hashes en el historial inmediatamente posterior a este texto)
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`src/agent/routes/vouchers.ts` no está en la carpeta que muestra el árbol de 4.1** (que no listaba `routes/` para `agent/`), pero sí es exactamente el archivo que pide T5.3 ("Archivos: ... src/agent/routes/vouchers.ts"). Se siguió la tarea, más específica y más reciente que el árbol ilustrativo de 4.1.
+2. **`RETRY_MAX_DELAY_MS` bajó de 4000ms a 1000ms** (hallazgo 2 arriba) — un valor congelado en el diseño (4.5) que resultó ser inalcanzable con los otros parámetros también congelados (`RETRY_MAX_ATTEMPTS=4`, base 250ms). Se documenta acá en vez de tocar 4.5 directamente porque el comportamiento observable (cuántas veces se reintenta y con qué cadencia) no cambia — solo el techo defensivo de un caso límite que el loop por default nunca alcanzaba.
+3. **`ChannelDepositPort`/`createStaticDepositPort` son un stand-in, no el `agent/channel-cache.ts` del diseño 4.1.** WU5 es "escalón 1.5 contra consumo simulado": no hay un canal real todavía. El default (máximo i128) hace que `remaining` esté siempre bien definido sin inventar un umbral de agotamiento no pedido por T5.3 (cuyo `Cumple` no incluye ningún `CL-R`). `channel_exhausted`/`channel_not_found`/`channel_not_open`/`channel_closing` quedan fuera de esta ruta hasta que WU6 conecte un depósito real.
+4. **`agent/main.ts` no fue tocado.** T5.3 solo lista `src/agent/app.ts` y `src/agent/routes/vouchers.ts` como archivos; `createAgentApp`/`createAgentBoot` quedan completos y probados, pero el proceso CLI real (`npm run agent`) sigue haciendo únicamente el cobro puntual de escalón 1. Falta cablear `app.listen()` + `createAgentBoot()` en `main.ts` para que el agent corra de verdad como servidor — ver "Puntos abiertos".
+5. **Comparación de `X-Gateway-Token` en tiempo constante** se implementó hasheando ambos lados con SHA-256 antes de `crypto.timingSafeEqual` (evita que `timingSafeEqual` tire por longitudes distintas, sin revelar el largo real del token por un camino de salida anticipado).
+
+**Descubrimientos no obvios:** la coalescencia (diseño 4.3) solo es determinística en un test si las N requests concurrentes se emiten en el mismo tick de JS — sobre un socket HTTP real no hay garantía de que lleguen todas antes de que el microtask del mutex empiece a procesar el batch. Por eso `vouchers.test.ts` prueba la coalescencia llamando `createVoucherService(...).handle(...)` directamente con `Promise.all(...)` (sin pasar por Express/HTTP) para T5.4, y reserva las pruebas HTTP reales para auth/schema/channel-required, que no dependen de timing. Guardado en Engram como discovery.
+
+**Puntos abiertos para el próximo lote (WU6 en adelante):**
+
+- Cablear `agent/main.ts` para que arranque como servidor real: `app.listen()` antes de `createAgentBoot()` (FC-R1), y publicar `GET /health` + `POST /vouchers` de punta a punta — hoy `createAgentApp`/`createAgentBoot` están completos y probados pero nada los invoca desde el entrypoint del proceso.
+- WU6 debe reemplazar `agent/signer.ts::createFakeSigner()` por el firmante ed25519 real sobre `COMMITMENT_SECRET`, detrás del mismo `SignerPort` — `agent/routes/vouchers.ts` no debería necesitar ningún cambio, solo `config/boot.ts::buildAgentVouchersInstance` pasando el signer real en vez del fake.
+- WU6 debe reemplazar `createStaticDepositPort()` por `agent/channel-cache.ts` (getters del contrato: `deposited`, `balance`, `withdrawn`) y ahí sí cablear `channel_exhausted`/`channel_not_found`/`channel_not_open`/`channel_closing`, ninguno de los cuales tiene todavía una prueba en esta ruta.
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre **T8.2** (sin cambios respecto al Lote B).
+
+### Lote D — revisión final y modo serve (2026-09-15)
+
+Ejecutado en modo estándar (sin TDD estricto), sin acceso a testnet real. Cierra los ocho hallazgos de una revisión adversarial sobre `agent/routes/vouchers.ts`, `server/routes/charge.ts` y `agent/app.ts` (el reviewer reprodujo 1-3 de forma concreta), y el primero de los puntos abiertos del Lote C: `agent/main.ts` ahora también sabe correr como servidor.
+
+**1. MAJOR — `processBatch` podía dejar `handle()` colgado para siempre.** Reproducción concreta del reviewer: `voucherRecordSchema.ts` era `z.string().min(1)` mientras que `message2SignedSchema.signedAt` es `z.iso.datetime()` (sin offset); un registro persistido con un timestamp con offset pasaba el replay, quedaba en el índice, y la primera lectura "igual" contra ese canal hacía que `resolveEqual` llamara `.parse()` y tirara una excepción síncrona en mitad de la clasificación del batch — fuera de cualquier `try/catch` existente. Ese throw escapaba de `processBatch`, la promesa que envuelve `mutex.withChannelLock(...)` rechazaba, y como esa llamada se invoca con `void` y el propio mutex (`agent/mutex.ts`) le cuelga un `.finally().catch(() => {})` solo para silenciar el duplicado interno, la request colgaba sin log y sin respuesta. Fix de dos partes: (a) se agregó un `try/catch` externo a todo el cuerpo de `processBatch` que, antes de correr, envuelve el `resolve` de cada entrada del batch para llevar la cuenta de cuáles siguen pendientes (`unresolved`); si algo se escapa de los `try/catch` internos, el `catch` externo resuelve cada pendiente con un envelope `internal_error` (`buildUnsigned`) y loguea una sola línea de error — y se agregó `.catch()` al `void mutex.withChannelLock(...)` como defensa adicional; (b) se cerró el disparador concreto endureciendo `persistence/voucher-log.ts::voucherRecordSchema.ts` a la misma regla `z.iso.datetime()` (sin offset) que ya usa `signedAt` en el mensaje 2 — ambos campos concuerdan ahora en una sola regla. Prueba: `vouchers.test.ts` → *"a throw during classification (malformed persisted ts) settles 503 internal_error instead of hanging, and releases the lock (review finding 1)"* — inyecta (vía `voucherLog.append()`, que no valida su argumento) un registro con `ts` con offset, dispara una lectura igual, confirma `503`/`internal_error`/`retryable:true`, y confirma que una segunda lectura normal en el mismo canal inmediatamente después sigue funcionando (el lock se liberó).
+
+**2/3. MAJOR — `GET /paid-resource` tenía tres caminos de excepción no atrapada.** `BigInt(cumulativeBytesParam)` tiraba un `SyntaxError` crudo con `?cumulativeBytes=abc`; `computeChargeDeltaRaw` tiraba un `RangeError` para una lectura menor a la anterior; y una lectura idéntica producía `amountRaw = 0n`, que el SDK cliente rechaza con `Invalid amount: "0"` — la falla concreta que hubiera aparecido en la corrida de testnet ante un segundo `GET /paid-resource` idéntico. Sin ningún error handler en `server/app.ts`, las tres terminaban en la página HTML 500 default de Express, con rutas absolutas del filesystem en el stack trace. Fix: `shared/money.ts` gana `parseNonNegativeIntegerRaw` (mismo patrón de regex que `rawAmountSchema`/`rawPositiveIntegerRaw`, pero permitiendo `0`); `server/routes/charge.ts` la usa para devolver `400` JSON ante un valor inválido, y agrega un cortocircuito `cumulativeBytesNow <= cumulativeBytesPrevious` que devuelve `200` con envelope M2 `stale_reading` (`retryable:false`) **antes** de llamar a `computeChargeDeltaRaw` o al `ChargePort` — cubre a la vez la lectura menor (hallazgo 2) y la lectura idéntica/no avanza (hallazgo 3) con la misma rama, sin intento de cobro ni de challenge 402. `server/app.ts` agrega `jsonErrorHandler`, un error handler catch-all (mismo principio que `agent/app.ts::jsonParseErrorHandler`: nunca HTML, siempre JSON) que traduce cualquier excepción no atrapada en un envelope `internal_error` — cierra la garantía que `shared/reasons.ts` ya documentaba ("cualquier excepción no tipada se mapea a `internal_error`... un stack trace nunca llega al gateway") pero que ningún middleware implementaba todavía para `server/app.ts`. Pruebas nuevas en `server/app.test.ts`: `?cumulativeBytes=abc` → `400` JSON; una lectura menor → `200`/`stale_reading`; dos `GET /paid-resource` idénticos seguidos → la segunda es `200`/`stale_reading` sin llamar al `ChargePort` (contador de llamadas); y un `ChargePort` que tira una excepción con una ruta de archivo en el mensaje → la respuesta es JSON, sin `<html`, sin ninguna línea `at ....ts:N`, y con `reason: internal_error`.
+
+**4. MEDIUM — `agent/app.ts` no exponía `/ready`.** Solo tenía `/health` (siempre `200`) y `POST /vouchers` (fail-closed vía `requireReady`, pero sin ruta de diagnóstico propia) — un operador no podía distinguir `config_invalid` de `voucher_log_corrupt` sin leer el 503 de `POST /vouchers` (que además los colapsa a ambos en `internal_error` vía `toM2Reason`, correcto para el gateway pero inútil para diagnóstico humano). Fix: se monta `app.get("/ready", createReadyRoute(options.boot))`, reusando la misma ruta genérica de `server/routes/health.ts` que ya usa `server/app.ts` — sin código nuevo, solo cablearla. Pruebas nuevas en `agent/app.test.ts`: `/ready` es `200`/`ready` con la instancia lista; `/ready` muestra `voucher_log_corrupt` sin colapsar a `internal_error` cuando la instancia no está lista.
+
+**5. MINOR — `agent/main.ts` seguía siendo un CLI de un solo cobro, sin modo servidor.** Era el primer punto abierto del Lote C. Fix: se agrega un modo `serve` (`node src/agent/main.ts serve`, script `npm run agent:serve`) que hace `app.listen(AGENT_PORT)` **antes** del primer `ensureReady()` de `createAgentBoot()` (FC-R1, mismo orden que `server/main.ts`), cablea el emisor de eventos con webhook opcional (`createWebhookSink`, mismo patrón que `server/main.ts`) dentro de `buildAgentVouchersInstance(env, { emit })`, y mantiene el modo por default (sin argumentos) como el cobro único de siempre. `config/boot.ts::buildAgentVouchersInstance` gana un parámetro `deps.emit` opcional para esto. El despacho de modo se extrajo a una función pura y exportada, `resolveMode(argv)`, y los efectos de lado del entrypoint (antes un `void main()` incondicional) quedan detrás de un chequeo explícito `import.meta.url === pathToFileURL(process.argv[1]).href` — así un test puede importar `resolveMode` sin levantar un server ni disparar un cobro real. `AGENT_PORT` ya existía en `config/env.ts`/`.env.example` desde el Lote C; no hizo falta agregarlo. Prueba nueva: `agent/main.test.ts` → `resolveMode(["node","main.ts"])` es `"one-shot"`, `resolveMode(["node","main.ts","serve"])` es `"serve"`, cualquier otra cosa (`"Serve"`, `"--serve"`) es `"one-shot"`.
+
+**6. MINOR — un sink de eventos que tira excepción convertía un vale ya persistido en un 503.** `emitEvent(...)` corría dentro del mismo `try` que la firma y el `append()` (que ya hizo `fsync`, VP-R3); si el sink tiraba, el `catch` de esa rama respondía `internal_error` a candidatos cuyo vale ya estaba en disco — inconsistencia entre lo persistido y lo respondido. Fix: se envuelve el `emitEvent(...)` en su propio `try/catch` que solo loguea un WARN (`usage_voucher_signed_emit_failed`) y sigue — el vale firmado siempre se responde `200`/`signed` sin importar la salud del sink. Prueba: `vouchers.test.ts` → *"a throwing event sink never turns an already-persisted voucher into a 503 (review finding 6)"*.
+
+**7. MINOR — `depositPort.getDepositRaw`/`signer.sign` sin cota bajo el lock del canal.** Ninguna de las dos llamadas tenía timeout propio; una implementación real colgada (RPC, HSM) habría retenido el mutex por canal indefinidamente, bloqueando cada `handle()` en cola detrás. Fix: `shared/retry.ts` exporta ahora `withTimeout()`/`TimeoutError` como primitiva reutilizable, standalone (el `attemptTimeoutMs` interno de `withRetry` delega en la misma función en vez de mantener una copia privada casi idéntica); `agent/routes/vouchers.ts` envuelve ambas llamadas con `withTimeout(..., portCallTimeoutMs, label)`, donde `portCallTimeoutMs` viene de `PORT_CALL_TIMEOUT_MS` (nueva variable en `config/env.ts`, agentSchema, default `10000`, documentada en `.env.example`). Un `TimeoutError` en `depositPort.getDepositRaw` mapea a `upstream_unavailable`; en `signer.sign`, a `signer_unavailable` — ambos `retryable:true`; cualquier otra excepción (no timeout) sigue mapeando a `internal_error` como antes, sin romper la prueba ya existente de "an unexpected signer failure maps to internal_error". Pruebas nuevas: un `depositPort`/`signer` que nunca resuelve, con `portCallTimeoutMs: 20` en el test, produce `503`/`upstream_unavailable` o `503`/`signer_unavailable` respectivamente, y una segunda llamada al mismo canal inmediatamente después confirma que el lock se liberó. `shared/retry.test.ts` suma pruebas directas de `withTimeout`/`TimeoutError` (resuelve a tiempo, rechaza con el label correcto al agotar el timeout, propaga sin tocar una falla que no es timeout).
+
+**8. Gap de pruebas — orden append/fsync vs. respuesta, y "`handle()` siempre se asienta".** Ya existían pruebas de que el vale queda en disco *después* de que `handle()` resuelve (comparando el contenido del archivo), pero ninguna probaba el orden causal directamente. Prueba nueva: `vouchers.test.ts` → *"append (fsync included) happens before handle() resolves (VP-R3, review finding 8)"* — envuelve la instancia real de `VoucherLog` en un `Proxy` que intercepta `append()` para grabar el orden de llamadas relativo a cuándo se resuelve `handle()`; el array resultante es exactamente `["append", "resolved"]`. La segunda mitad de este hallazgo (`handle()` siempre se asienta aunque el batch tire una excepción) la cubre la prueba del hallazgo 1.
+
+**Comandos ejecutados (resultado final):**
+
+| Comando | Resultado |
+|---|---|
+| `npm run check` (`tsc --noEmit`) | sin errores |
+| `npm test` (`node --test`) | 200/200 tests en verde (182 antes del Lote D; +18 nuevos entre `agent/routes/vouchers.test.ts` (+5), `agent/app.test.ts` (+2), `server/app.test.ts` (+4), `shared/money.test.ts` (+2), `shared/retry.test.ts` (+3) y `agent/main.test.ts`, archivo nuevo (+2)) |
+| `npm run verify:deps` | `single resolved version for every pinned package` |
+
+**Commits:**
+
+- `6e8d517` — `fix(agent): settle every voucher request and expose /ready` (hallazgos 1, 4, 6, 7, 8)
+- `9df1c53` — `fix(server): return M2 envelopes for invalid or non-advancing charge readings` (hallazgos 2, 3)
+- `14f20c1` — `feat(agent): add serve mode for the vouchers endpoint` (hallazgo 5)
+
+**Desviaciones respecto del diseño/spec, con motivo:**
+
+1. **`config/boot.ts::buildAgentVouchersInstance` gana `deps.emit` y usa `env.PORT_CALL_TIMEOUT_MS`** en el mismo commit (`6e8d517`) que endurece `vouchers.ts`, aunque `deps.emit` solo lo consume el modo `serve` del commit siguiente (`14f20c1`). Se documentó así en vez de partir el archivo en dos commits porque es un único parámetro opcional en la firma de una función ya tocada por el hallazgo 7 (el threading de `portCallTimeoutMs`) — partirlo en un hunk separado no habría dejado ningún commit más fácil de revisar o de revertir por separado.
+2. **El hallazgo 1 se cerró con dos capas (safety-net + schema) en vez de solo una.** Endurecer únicamente el schema de `ts` cierra el disparador concreto que encontró el reviewer, pero no la clase de bug (cualquier throw futuro en la fase de clasificación seguiría colgando `handle()`). Se prefirió corregir ambas: la causa raíz concreta y la garantía estructural de que un batch siempre se asienta, tal como pedía el encargo explícitamente ("wrap the entire processBatch body").
+3. **No se tocó `docs/payments-sdd.md`** (evidencia de verificación humana) — instrucción explícita del encargo; la compuerta **T8.2** sigue sin cerrarse y todo lo de este lote es código + tests, no evidencia de campo.
+
+**Puntos abiertos:**
+
+- La compuerta de escalón sigue vigente: nada de WU6/WU7 hasta que un humano cierre **T8.2** (sin cambios respecto a los lotes anteriores) — ver los pasos actualizados más arriba en esta sección (con la nota de `?cumulativeBytes=` agregada en el Lote D).
+- WU6 sigue pendiente de reemplazar `createFakeSigner()`/`createStaticDepositPort()` por las implementaciones reales (sin cambios respecto al Lote C).
+
+### T8.2 — evidencia testnet (2026-09-15)
+
+Ejecutado por un agente con acceso a un `.env` real de testnet (cuentas fondeadas por un humano vía friendbot XLM y el faucet de Circle para USDC). Cierra la compuerta dura de escalón: **dos** cobros reales, sponsored (fee payer = recipient, S1-R3 verificado), quedaron confirmados en el explorador.
+
+**Cuentas usadas** (ambas ya tenían la trustline de USDC contra `USDC_SAC_CONTRACT` por defecto):
+
+- Recipient / fee payer (`STELLAR_RECIPIENT`, `FEE_PAYER_SECRET`): `GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO`
+- Agent / funder / signer (`SIGNER_SECRET`): `GAKAN325AJLQBWR2DPT4ETPHNFVQV4LKM2L4YF63QCVHKREHTPEGXXN3`
+
+**Correcciones previas necesarias (Part 1, commit `5c2ddb4`, antes de poder correr nada de esto):**
+
+1. `scripts/preflight.ts`: el guard `import.meta.url === \`file://${process.argv[1]}\`` nunca matchea en Windows (`import.meta.url` trae el prefijo `file:///D:/...`); se reemplazó por `pathToFileURL(process.argv[1]).href`, el mismo patrón de `src/agent/main.ts`. Además el script no cargaba `dotenv/config` — sin eso, `npm run preflight` nunca leía el `.env` real y el paso 4 del runbook (§6, más arriba) era imposible de completar. Se agregó el import, igual que en `server/main.ts`/`agent/main.ts`.
+2. `src/config/env.ts`: dotenv parsea una línea `KEY=` vacía como `""`, no `undefined`, y `z.optional()` solo acepta `undefined` — así que dejar `CHANNEL_CONTRACT=`/`COMMITMENT_PUBKEY=`/`FUNDER_ACCOUNT=`/`COMMITMENT_SECRET=`/`BACKEND_EVENTS_URL=` vacíos (el formato que `.env.example` documenta para las variables de escalón 2) hacía fallar `parseServerEnv`/`parseAgentEnv` con "invalid or missing environment variable(s)". Se agregó un helper `emptyToUndefined()` (`z.preprocess`) aplicado a los cinco campos opcionales. `.env.example` se dejó sin tocar — el fix está en el parseo, no en el formato del archivo.
+3. `.gitignore` gana `.playwright-mcp/`.
+
+Con esas dos correcciones, `npm run preflight` contra el `.env` real imprime `{"level":"info","msg":"preflight: USDC trustline present on all checked accounts"}` (antes: no imprimía nada en absoluto en Windows).
+
+**Comandos ejecutados:**
+
+```
+npm run check                    # tsc --noEmit, limpio
+npm test                         # 202/202 (200 previos + 2 nuevos de env.test.ts)
+npm run preflight                # trustline OK en ambas cuentas
+npm run server > data/server.log 2>&1 &
+curl -s http://localhost:8080/ready       # {"status":"ready","stage":1,...}
+npm run agent > data/agent-run-1.log 2>&1
+curl -s https://horizon-testnet.stellar.org/transactions/<txHash1>
+npm run agent > data/agent-run-2.log 2>&1   # misma sesión, mismo cumulativeBytes por defecto
+curl -s https://horizon-testnet.stellar.org/accounts/<G...>   # balances antes/después, ambas cuentas
+```
+
+Para la tercera lectura (cumulativeBytes más alto) se descubrió en su momento que `npm run agent` (`src/agent/main.ts::runOneShot`) construía la URL con `new URL("/paid-resource", PAYMENT_SERVER_URL)` **sin** query string — no existía ningún mecanismo (env var ni flag de CLI) para pasarle `?cumulativeBytes=` desde la CLI; ese parámetro solo lo leía la ruta del servidor (`src/server/routes/charge.ts`). En este lote se usó un script temporal fuera del repo (borrado inmediatamente después de usarlo, nunca commiteado) que importaba sin modificar `createMppChargeClient`/`runOneShotPurchase` de `src/agent/charge-client.ts` y armaba la URL con `?cumulativeBytes=2097152` — mismo código de producción, mismo firmado real, solo con la URL explícita que la CLI no exponía.
+
+**Cerrado en un lote posterior** (commit `fix(agent): handle unsigned charge responses and accept cumulative bytes from the CLI`): `npm run agent` ahora acepta `--bytes <n>` (flag, no posicional — `resolveCumulativeBytes()` en `src/agent/main.ts`) con fallback al env var `CUMULATIVE_BYTES` y default `1048576` (1 MiB, igual que el default del servidor), validado con el mismo parser no-negativo de `shared/money.ts` que usa la ruta del servidor. Uso real para repetir el runbook de arriba sin script temporal:
+
+```
+npm run agent -- --bytes 1048576   # cobro 1, delta = 1 MiB
+npm run agent -- --bytes 2097152   # cobro 2, delta = otro 1 MiB
+CUMULATIVE_BYTES=2097152 npm run agent   # equivalente vía env var
+```
+
+**Resultado — cobro 1 (cumulativeBytes por defecto, 1 MiB = 1048576):**
+
+- `txHash`: `57c29984c496263d9a057d33f8da3e350e8ec7a6ef704a8cb5b2dfd630e89263`
+- `explorerUrl`: https://stellar.expert/explorer/testnet/tx/57c29984c496263d9a057d33f8da3e350e8ec7a6ef704a8cb5b2dfd630e89263
+- Horizon: `successful: true`, `fee_charged: 22959` (stroops), `source_account: GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO` (el recipient/fee payer, nunca el agent — S1-R3)
+- stdout del server: `charge.settled` con `amountRaw: "10000"` y el mismo `txHash`/`explorerUrl`
+
+**Resultado — cobro 2 (cumulativeBytes = 2097152, delta de otro 1 MiB):**
+
+- `txHash`: `2b75ec8dd87011de3b2104029ea1e4c5819845780a3aedbe4414398609f5b9d0`
+- `explorerUrl`: https://stellar.expert/explorer/testnet/tx/2b75ec8dd87011de3b2104029ea1e4c5819845780a3aedbe4414398609f5b9d0
+- Horizon: `successful: true`, `fee_charged: 22959`, `source_account: GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO`
+- stdout del server: segundo `charge.settled`, `amountRaw: "10000"` (delta 2097152 − 1048576 = 1048576 bytes = 1 MiB, mismo precio)
+
+**Balances (Horizon, unidades nativas):**
+
+| Momento | Agent USDC | Agent XLM | Recipient USDC | Recipient XLM |
+|---|---|---|---|---|
+| Antes del faucet de Circle | 0.0000000 | 9999.9999900 | 0.0000000 | 9999.9999900 |
+| Fondeado, antes de cobrar | 20.0000000 | 9999.9999900 | 0.0000000 | 9999.9999900 |
+| Después del cobro 1 | 19.9990000 | 9999.9999900 | 0.0010000 | 9999.9976941 |
+| Después del cobro 2 | 19.9980000 | 9999.9999900 | 0.0020000 | 9999.9953982 |
+
+El balance XLM del agent **no cambió en ningún momento** (S1-R3: nunca paga fee). La caída de XLM del recipient entre cobros es exactamente `fee_charged` (22959 stroops = 0.0022959 XLM) cada vez. El USDC se mueve raw-a-raw: −0.0010000 en el agent por cada +0.0010000 en el recipient, igual a `amountRaw: "10000"` (10000 raw units = 0.0010000 USDC con 7 decimales).
+
+**Segunda lectura con el mismo cumulativeBytes (repetido, T8.3 parcial) — hallazgo inesperado:**
+
+`npm run agent` corrido una segunda vez inmediatamente después del cobro 1 (mismo proceso de servidor, mismo `cumulativeBytes` por defecto = 1048576) **no** hizo ningún intento de cobro on-chain — confirmado: ni balances ni stdout del server cambiaron, y el servidor respondió el envelope M2 `stale_reading` (`status: 200`, `retryable: false`) como diseña `src/server/routes/charge.ts` (FT-R6). La lógica de negocio es correcta y segura (nunca hay doble cobro). Pero en ese momento la salida de la CLI **no** era el mensaje limpio de "nothing new to bill" que se esperaba: `src/agent/charge-client.ts::createMppChargeClient().purchase()` daba por sentado que toda respuesta `200` traía un campo `payment`, y como el envelope `stale_reading` no lo trae, tiraba `Error("stage 1 purchase response is missing payment.txHash/explorerUrl/network")`, que `agent/main.ts` logueaba como `{"level":"error","msg":"stage 1 purchase failed",...}` con `process.exitCode = 1`. No era un error del SDK (`mppx.fetch()` resolvía normal) ni una falla de negocio — era un gap de manejo de respuesta en el cliente propio, que no distinguía un `Message2Unsigned` (`status:"unsigned"`) de un cobro realmente asentado antes de leer `payment.txHash`. Quedó anotado como punto abierto para WU9/T9.2 (T8.2 fue evidencia, no código) y se cerró en el lote siguiente — ver "Cerrado en un lote posterior" más arriba en esta misma sección.
+
+**Limpieza:** servidor detenido (`taskkill`), `netstat` confirma el puerto 8080 sin `LISTENING`; el script temporal usado para el cobro 2 se borró del árbol del repo antes de este commit; `data/server.log` y `data/agent-run-*.log` quedan en `data/` (gitignored, no se commitean).
+
+**Puntos abiertos (agregados por este lote, cerrados en el lote siguiente — commit `fix(agent): handle unsigned charge responses and accept cumulative bytes from the CLI`):**
+
+- ~~`agent/main.ts`/`agent/charge-client.ts` no distingue un `Message2Unsigned` 200 de un cobro asentado~~ — cerrado: `charge-client.ts::purchase()` parsea el body con `message2UnsignedSchema` (`shared/messages.ts`) antes de asumir un pago asentado; `agent/main.ts` ahora imprime "nothing new to bill" y sale con `exitCode 0` para un M2 no retryable (p. ej. `stale_reading`), y con `exitCode 1` (más `retryAfterSeconds` si el header `Retry-After` está presente) para uno retryable (p. ej. `signer_unavailable`, `503`). Nunca imprime stack trace.
+- ~~`npm run agent` no tiene forma de pasar `?cumulativeBytes=`~~ — cerrado: `--bytes <n>` (flag) con fallback a `CUMULATIVE_BYTES` (env) y default `1048576`, validado con `shared/money.ts::parseNonNegativeIntegerRaw` (mismo parser que usa la ruta del servidor). `?sessionId=` sigue sin exponerse desde la CLI (no lo pedía este punto abierto; sigue usando la sesión por defecto del servidor).
+
+### Lote E — escalón 2: canal (2026-09-16)
+
+Implementa WU6 y WU7 (T6.1–T6.5, T7.2–T7.5; T7.1 no aplica — ver más abajo), adaptados por los hallazgos del spike (`scratchpad/spike/stage2-spike.md`, fuera del repo) y por instrucciones explícitas del encargo de implementación que **priman sobre el diseño original** cuando difieren. Ejecutado con acceso real a un `.env` de testnet ya provisto (canal #2 abierto por el spike; funder `GAKAN325AJLQBWR2DPT4ETPHNFVQV4LKM2L4YF63QCVHKREHTPEGXXN3`, recipient `GDSWY2JKMCUVGA7WADKCPTER436752X2P3UR5R7UGD6M2I7NIYNS6XIO`).
+
+#### Adaptaciones de diseño (hechos que invalidan partes de §4)
+
+1. **No hay `settle`.** El único wasm desplegable hoy (hash `f9b7fdf860ce427097226f45f72b336763ca55d46c967076a94eb9682d8c484b`, compartido en toda la red testnet, sin toolchain Rust disponible para compilar `main` del contrato) no implementa `settle` — confirmado en vivo (`HostError: Error(WasmVm, MissingValue)` al simular). **T7.1 (`settle-scheduler.ts`) no se implementó**: CL-R5 no tiene objeto en este despliegue. La mitigación de R3 (recipient pierde lo adeudado si el funder reembolsa primero) recae por completo en CL-R6/CL-R8: detectar `close_start` y cerrar de inmediato con el mayor vale — sin una segunda línea de defensa vía `settle`.
+2. **No hay `deposited()` ni `withdrawn()`.** El mismo wasm tampoco expone esos dos getters. `deposited` se resuelve así, en orden: (a) `deposited()` on-chain (nunca funciona hoy, pero el código lo intenta primero por si una revisión futura del wasm sí lo soporta); (b) el registro local `data/channel-{network}.json` (escrito por `agent/channel.ts open|top-up`); (c) `balance()` on-chain como última red de seguridad (subestima el depósito si ya hubo un `close`, nunca lo sobrestima). Para el canal #2 (abierto por el spike, sin registro local) el fallback (c) resolvió el depósito correctamente porque coincide con el balance real (nunca se firmó nada contra él antes de este lote). La invariante de salud del diseño (`balance == deposited - withdrawn`) se adaptó a `closeEffectiveAtLedger !== null` (vía `getChannelState()`) como señal primaria, y `balance > depositado-rastreado` como respaldo (`channel_invariant_violated`).
+3. **El monitor de `close_start` usa `watchChannel()` de `@stellar/mpp/channel/server`**, no un poll manual de `getEvents` con `persistence/cursor.ts`. `watchChannel()` ya hace exactamente eso internamente (cursor, decodificación de topics, tipado de eventos) pero no expone ningún hook para persistir su cursor entre reinicios — así que `cursor.ts` (T2.2, ya existente) **no se usó**: no hay forma de alimentarlo desde `watchChannel()` sin reimplementar su loop interno. Documentado como limitación (ver abajo), no como bug.
+4. **Integración agent→server: hand-rolled, no `@stellar/mpp/channel/client`/`server`'s `stellar.channel(...)` Method.** Dos razones, ambas confirmadas leyendo el código fuente instalado del SDK (`node_modules/@stellar/mpp/dist/channel/{client,server}/Channel.js`) antes de decidir:
+   - El cliente del SDK (`createCredential`) solo expone eventos de progreso (`challenge`/`signing`/`signed{cumulativeAmount}`) — nunca la firma/`commitmentPubkey` en crudo. El mensaje 2 (contrato **externo**, ya congelado, hacia el gateway) necesita esos dos campos tal cual — usar el cliente del SDK igual habría requerido firmar por separado para poder reportarlos, duplicando trabajo de RPC/firma sin ningún beneficio (ed25519 es determinístico: ambas firmas habrían sido idénticas).
+   - El `verify()` del servidor del SDK solo es alcanzable a través de su propio protocolo de challenge/credential, mediado por una instancia `Mppx` completa — no hay forma soportada de invocarlo para un vale cuya firma ya se calculó de forma independiente. Forzar el flujo completo del cliente solo para llegar a ese `verify()` habría significado reimplementar un segundo baile HTTP 402 para un enlace interno que las dos puntas ya controlan y confían plenamente.
+   - Lo que **sí** se usa del SDK tal cual: `close()` (único llamador: `channel-service.ts::closeChannel`), `getChannelState()` (identidad + estado on-chain), y `watchChannel()` (monitor). Ver el comentario de `config/boot.ts::createServerDeliveringSigner` para el razonamiento completo en el código.
+5. **La verificación del servidor (`server/channel-service.ts::verifyAndAccept`) es la misma receta que usa el SDK internamente, hand-implementada**: simula `prepare_commitment(amount)` (gratis, de solo lectura) y verifica la firma ed25519 localmente contra `COMMITMENT_PUBKEY` (`shared/stellar/channel-contract.ts::verifyCommitmentSignature`) — no pasa por el `Store.AtomicStore`/Método del SDK (ver el comentario de cabecera de `server/channel-store.ts`).
+6. **Sin autenticación adicional en `POST /channel/vouchers`**: la firma ed25519 del compromiso ES la credencial (mismo modelo de seguridad que usa el propio Método de canal de `@stellar/mpp`); forjar una requiere `COMMITMENT_SECRET`. Ruta interna, invisible para el gateway (diseño 4.1).
+
+#### Qué se construyó
+
+- `shared/stellar/channel-contract.ts` — driver de bajo nivel: `open`/`top_up`/`close_start`/`refund`/getters/`prepare_commitment` hand-rolled con `@stellar/stellar-sdk`, más el códec del mapa de compromiso (`decodeCommitmentBytes`/`assertCommitmentBinds`) y firma/verificación ed25519. Tercera excepción documentada a la regla de testabilidad 4.1 (junto a `config/boot.ts` y `agent/charge-client.ts`): un driver delgado, sin lógica de negocio, importado solo desde `config/boot.ts` y las dos CLIs.
+- `agent/channel.ts` — CLI unificada `open|top-up|close-start|refund|state` (un solo archivo, por instrucción explícita del encargo, en vez de los `cli/*.ts` separados del diseño original). `open` nunca imprime un secreto.
+- `agent/channel-cache.ts` — caché TTL (5 s) sobre un `ChannelRpcPort`, expone `ChannelDepositPort` con los cuatro estados (`open`/`closing`/`not_found`/`not_open`).
+- `agent/routes/vouchers.ts` — extendido: `ChannelInfo`/`ChannelDepositPort` ahora reportan estado + depósito; `classify()` gana la rama `exhausted`; `processBatch` corta por `channel_not_found`/`channel_not_open`/`channel_closing` antes de guardrails.
+- `agent/signer.ts` — `SignInput` gana `sessionId`/`cumulativeBytes`/`meterReadingId` (correlación, nunca parte de lo firmado).
+- `config/boot.ts` — `createRealChannelSigner`, `createServerDeliveringSigner` (entrega al servidor), `createStellarChannelRpcPort`, y en el lado servidor: `createServerChannelStatePort`, `createServerChannelVerifyPort`, `createServerChannelClosePort` (único llamador de `close()`), `createUsdcBalancePort`, `createHorizonTrustlinePort`, `createWatchChannelPort`, `buildServerChannelInstance`, `createServerChannelBoot`.
+- `server/channel-store.ts` — store de compromisos aceptados sobre el `VoucherLog` ya existente (append+fsync antes del ack; el índice más-alto-por-canal se reconstruye gratis vía el replay de `VoucherLog.open()`).
+- `server/channel-service.ts` — `verifyAndAccept` (mapea a `channel_not_found`/`channel_not_open`/`channel_closing`/`channel_exhausted`/`invalid_signature`/`stale_reading`) y `closeChannel` (único llamador de `close()`: chequeo de trustline previo, aserción de delta de balance post-cierre, eventos).
+- `server/close-monitor.ts` — combina `watchChannel()` (near-real-time) con un poll de respaldo cada `CHANNEL_POLL_INTERVAL_MS`; dispara `onClosingDetected` una sola vez; nunca lanza (hallazgo del spike sobre el crash de XDR).
+- `server/routes/channel.ts` + wiring en `server/app.ts`/`server/main.ts` — `POST /channel/vouchers`, `/ready` con `stage:2` + estado del monitor.
+- `server/channel-admin.ts` — CLI del operador (`state|close`).
+- `config/env.ts` — compuerta única de escalón 2 (`CHANNEL_CONTRACT` presente implica `COMMITMENT_PUBKEY`+`FUNDER_ACCOUNT` obligatorios en el servidor, `COMMITMENT_SECRET` obligatorio en el agente).
+
+#### Dos bugs encontrados y corregidos durante la implementación
+
+1. **`COMMITMENT_SECRET` no es hex crudo.** El esquema (`config/env.ts`, ya existente antes de este lote) validaba `COMMITMENT_SECRET` como 64 caracteres hex, y `shared/stellar/channel-contract.ts` lo parseaba con `Keypair.fromRawEd25519Seed(Buffer.from(secret, "hex"))`. El `.env` real (provisto por el spike) tiene un secreto `S...` de 56 caracteres (mismo formato que `SIGNER_SECRET`/`FEE_PAYER_SECRET`, generado con `Keypair.random()`). `Buffer.from(str, "hex")` no lanza con una entrada inválida — trunca en el primer nibble no-hex — así que esto habría producido una clave de firma silenciosamente incorrecta. Se confirmó la hipótesis comparando `Keypair.fromSecret(COMMITMENT_SECRET).rawPublicKey()` contra `COMMITMENT_PUBKEY` (coinciden) antes de corregir. Corregido: `isStellarSecretSeed` + `Keypair.fromSecret()`, función renombrada a `commitmentKeypairFromSecret`.
+2. **Un `:` en el nombre de archivo rompe `fs.renameSync` en Windows.** `STELLAR_NETWORK` es literalmente `"stellar:testnet"`. En NTFS un `:` en un nombre de archivo se interpreta como separador de Alternate Data Stream; `fs.openSync(path, "a")` (como usa `VoucherLog`, ya existente) escribe "con éxito" contra un stream oculto de un archivo base truncado — nunca lanza, así que pasó desapercibido hasta ahora — pero `fs.renameSync` (el patrón atómico tmp+fsync+rename que usa tanto `persistence/cursor.ts` como el nuevo `persistence/channel-record.ts`) falla con `EINVAL`. Corregido con `shared/stellar/network.ts::sanitizeNetworkForFilename()`, usado en los archivos nuevos de este lote; la convención de nombres de `VoucherLog` queda sin tocar (fuera de alcance) pero documentada como el mismo defecto latente.
+
+#### Evidencia de testnet en vivo
+
+**Comandos ejecutados** (servidor en `:8080`, agente en `:8081`, `RPC_HEALTH_TIMEOUT_MS=8000` — el default de 2000 ms resultó insuficiente para el chequeo de salud RPC en este entorno, aunque una llamada RPC aislada tardó ~530 ms; documentado como punto abierto):
+
+```
+npm run server                 # RPC_HEALTH_TIMEOUT_MS=8000, .env con canal #2
+npm run agent:serve
+curl /ready (server) -> {"status":"ready","stage":2,"channel":"CDR5FGVH...","monitor":{"running":true,...}}
+curl /ready (agent)  -> {"status":"ready","stage":1,...}
+```
+
+**Lazo M1→M2 contra el canal #2** (`CDR5FGVHHVYHJKBWW7BOZWNC2LA7EHKZ54TQIZPA4SRQ4X7MUPMUKU4S`, depósito 50 000 000 raw = 5 USDC):
+
+| Lectura | `cumulativeBytes` | `cumulativeAmount` | Resultado |
+|---|---|---|---|
+| 1 | 1 048 576 | `"10000"` | `signed`, `reused:false`, `remaining:"49990000"` |
+| 2 | 2 097 152 | `"20000"` | `signed`, `reused:false`, `remaining:"49980000"` |
+| 3 (igual a la 2) | 2 097 152 | `"20000"` | `signed`, `reused:true`, misma firma |
+| 4 (menor al máximo) | 1 048 576 | `"10000"` | `unsigned`, `reason:"stale_reading"` |
+| 5 (sobre el depósito) | 6 000 000 000 | `"57220459"` | `unsigned`, `reason:"channel_exhausted"`, `detail:"requested cumulative 57220459 exceeds channel deposit 50000000"` |
+
+`npm run channel-admin:state` sobre el canal #2 confirmó `serverHighestAcceptedRaw:"20000"` — el store del servidor sostiene el mayor compromiso, coincidiendo con la lectura 2/3 del agente. Canal #2 se dejó intacto (no se llamó `close`/`close_start`/`refund` sobre él): `balanceRaw` sigue en `50000000`, `closeEffectiveAtLedger: null`.
+
+**Canal #3 (descartable, ciclo completo)**:
+
+- Abierto con `npm run channel:open -- --deposit 10000000 --waiting-period 60` (1 USDC): contrato `CCMCUTEJAHVPVURVDK6KAVH4VYQPDDRMCMWLVVEIJZ27XUVTMDITFRMU`, tx [`6c7f3d374a6ca2a6532cdb51518ef46fc2c88f4637e4d95ee1ca26f17ee77072`](https://stellar.expert/explorer/testnet/tx/6c7f3d374a6ca2a6532cdb51518ef46fc2c88f4637e4d95ee1ca26f17ee77072), `feeChargedStroops:"183144"` (aprox. 0.018 XLM — wasm ya "caliente" por los canales #1/#2, igual que documentó el spike).
+- Un vale firmado por 1 000 000 raw (0.1 USDC) vía `POST /vouchers` del agente (servidor reiniciado apuntando a este canal con `CHANNEL_CONTRACT` override): `remaining:"9000000"`.
+- `npm run channel-admin:close` (con el mismo override): tx [`c5bc9bc4f8895a356edaff47552ad7d52da4736a42fe9d3c92fdab2e0497c339`](https://stellar.expert/explorer/testnet/tx/c5bc9bc4f8895a356edaff47552ad7d52da4736a42fe9d3c92fdab2e0497c339), `settledRaw:"1000000"`, `refundedRaw:"9000000"`. Confirmado en Horizon (`effects`): recipient +0.1000000 USDC, funder +0.9000000 USDC, misma transacción, `successful:true`, `source_account` = recipient (fee patrocinado).
+- `npm run channel:close-start` sobre el canal ya cerrado: falla como se esperaba — `HostError: Error(Contract, #4)` (`AlreadyClosed`), confirmando que el cierre del recipient colapsa la salida unilateral del funder (spike Part B).
+
+**Limpieza**: ambos procesos detenidos (`taskkill`), `netstat` confirma los puertos 8080/8081 sin `LISTENING`. `npm test` da 297/297. `npm run check` sin errores. `npm run verify:deps` reporta una sola versión resuelta por paquete fijado.
+
+#### Desviaciones respecto de §4/§5, con motivo
+
+1. CLI unificada `agent/channel.ts` en vez de `cli/open-channel.ts`+`cli/top-up.ts`+`cli/close-start.ts`+`cli/refund.ts` — instrucción explícita del encargo de implementación.
+2. Verificación del servidor hand-rolled, no vía `stellar.channel(...)` de `@stellar/mpp/channel/server` — ver adaptación 4/5 arriba.
+3. Sin `settle-scheduler.ts` (T7.1) — sin función `settle` en el wasm desplegable.
+4. `close-monitor.ts` no usa `persistence/cursor.ts` — `watchChannel()` no expone un cursor persistible.
+5. `depositRaw` no viene de un getter `deposited()` sino de un registro local + `balance()` como respaldo — mismo motivo del punto 2 de "Adaptaciones de diseño".
+6. `RPC_HEALTH_TIMEOUT_MS` necesitó 8000 ms (no el default de 2000) para que el chequeo de salud del escalón 1 pasara en este entorno, pese a que una llamada RPC aislada fue rápida (aprox. 530 ms) — no se cambió el default en el código, solo se documenta como parámetro de arranque para este entorno.
+
+#### Limitaciones conocidas
+
+- Sin `settle` en el wasm actual: el recipient solo cobra cerrando el canal (`close`), nunca de forma parcial. Construir la revisión `main` actual del contrato requiere un toolchain Rust + `wasm32v1-none` + CLI `stellar`, no disponible en este entorno.
+- Un canal por proceso de servidor: `CHANNEL_CONTRACT` es una sola variable de entorno; servir múltiples canales simultáneos requeriría un proceso por canal o extender el diseño a un mapa de instancias (fuera de alcance de este lote).
+- Cursor del monitor no persistido entre reinicios: `watchChannel()` reinicia su barrido desde `latestLedger` (o `startLedger` si se lo pasa) en cada arranque del proceso; no hay forma de alimentarle un cursor incremental sin reimplementar su loop interno de `getEvents`.
+- `RPC_HEALTH_TIMEOUT_MS` default (2000 ms) resultó ajustado para el chequeo de salud del escalón 1 en este entorno; se usó 8000 ms para la evidencia de este lote.
+
+#### Puntos abiertos
+
+- Construir y desplegar la revisión `main` actual de `one-way-channel` (con `settle`/`withdrawn`) requiere un toolchain Rust — permitiría cerrar T7.1 y usar `deposited()`/`withdrawn()` reales.
+- Servir múltiples canales por proceso de servidor (hoy: uno por `CHANNEL_CONTRACT`).
+- Persistir el cursor del monitor de eventos entre reinicios (hoy: siempre arranca desde el ledger más reciente).
+- Reconsiderar si `RPC_HEALTH_TIMEOUT_MS` debería subir su default — no se tocó en este lote para no afectar el comportamiento del escalón 1 ya verificado.
+
+### Lote F — revisión del escalón 2 (2026-09-16)
+
+Correcciones de una revisión adversarial completa sobre el código del escalón 2 introducido en el Lote E (findings 1–10, tres tandas de commits: findings 1/3/6/7/8/10a en `fix(server): keep the payment server alive and closing during disputes`, findings 2/9/10b en `fix(channel): pin vouchers to the configured channel and verify recipient and token`, findings 4/5 en `fix(agent): make the internal voucher hop idempotent and distinguish RPC failures`). Cada hallazgo se describe con su causa raíz, la corrección aplicada y el test que la prueba.
+
+#### Hallazgo 1 (MAJOR) — un balance port que lanza tira abajo `closeChannel`
+
+`server/channel-service.ts::closeChannel` leía `funderBefore`/`funderAfter`/`recipientBefore`/`recipientAfter` sin ningún `try/catch` propio: `getSep41BalanceRaw` lanza si la simulación falla (Horizon/RPC caído, cuenta sin trustline), y eso escapaba hasta el `onClosingDetected` del monitor — justo el momento en que el canal está en disputa y el servidor más necesita seguir funcionando. Corrección: `readUsdcBalanceSafe()` envuelve cada lectura y devuelve `undefined` (nunca lanza); si ambas lecturas post-cierre fallan, el resultado es `closed_unverified` (nunca `closed` sin evidencia ni una excepción sin capturar); `config/boot.ts`'s `onClosingDetected` wiring además envuelve la llamada entera a `closeChannel` en `try/catch` con un WARN. Probado en `channel-service.test.ts`: *"a throwing usdcBalancePort for balanceBefore never rejects — still attempts the close and comes back closed_unverified"* y *"...for every post-close read comes back closed_unverified, never rejects"*.
+
+#### Hallazgo 2 (CRITICAL) — canal equivocado, settlement silenciosamente en cero
+
+El agente firmaba contra cualquier `channel` que trajera M1, el servidor aceptaba cualquier `channel` que trajera el body, y `closeChannel`/`store.getHighest()` seguían indexando por el `CHANNEL_CONTRACT` configurado — una discrepancia entre ambos (bug de cliente, caché stale, o manipulación) firmaba/aceptaba vales para un canal que el `close()` real nunca liquida. Corrección: `agent/routes/vouchers.ts::createVouchersRoute` fija cada request al `CHANNEL_CONTRACT` configurado — un `channel` presente pero distinto es `channel_not_found` sin firmar (`retryable:false`); ausente, usa el configurado (VE-R5, único modo real del escalón 2). `server/routes/channel.ts` rechaza con 400 un `channel` que no coincide con el configurado. `channel-service.ts::verifyAndAccept`/`closeChannel` verifican en cada llamada que `to`/`token` del canal (ahora expuestos por `ChannelChainInfo`) coincidan con `STELLAR_RECIPIENT`/`USDC_SAC_CONTRACT`; `config/boot.ts::buildServerChannelInstance` repite el mismo chequeo una vez al boot (`unavailable`/`channel_mismatch` en cualquiera de los dos casos, best-effort en boot — nunca bloquea el arranque por un RPC caído). Probado en `vouchers.test.ts` (*"...M1 channel differs from the configured CHANNEL_CONTRACT is rejected unsigned..."*, *"...with no M1 channel falls back to the configured CHANNEL_CONTRACT..."*), `channel-service.test.ts` (*"channel_mismatch when the channel's own `to`/`token`..."* x2, `verifyAndAccept` y `closeChannel`), `routes/channel.test.ts` (*"rejects a channel that does not match the configured CHANNEL_CONTRACT with 400"*) y `boot.test.ts` (*"unavailable/channel_mismatch when the channel's own to/token do not match..."*, más el caso positivo *"a matching channel identity at boot goes ready"*).
+
+#### Hallazgo 3 (MAJOR) — `unknown` de Horizon bloqueaba un cierre en curso
+
+`TrustlinePort.hasUsdcTrustline` era binario (`boolean`): un error de Horizon (caído, rate-limited) devolvía `false`, indistinguible de "el funder de verdad no tiene trustline" — y `closeChannel` bloqueaba el cierre en ese caso (R2), justo cuando una disputa necesita que el cierre proceda. Corrección: `TrustlinePort` es tri-state (`"yes"|"no"|"unknown"`); `"unknown"` falla abierto (WARN + procede con el cierre) en vez de bloquear sobre un fallo de diagnóstico. De paso, `USDC_ISSUER` (opcional, sin default — `USDC_SAC_CONTRACT` no tiene forma de revertirse a su issuer clásico) permite verificar también el issuer de la trustline, no solo `asset_code === "USDC"`. Probado en `channel-service.test.ts`: *"closeChannel: an unknown trustline status (Horizon error) proceeds with the close instead of blocking it"*.
+
+#### Hallazgo 4 (MAJOR) — el reintento del salto interno agente→servidor quedaba en 503 para siempre
+
+`channel-store.ts::accept()` usaba `<=` para decidir "stale": un vale con el mismo `cumulativeAmount` ya aceptado (reentrega tras un crash entre el accept del servidor y el propio append del agente) volvía `stale_reading`, `createServerDeliveringSigner` (`config/boot.ts`) lanzaba sobre `accepted !== true`, y `processBatch` (`agent/routes/vouchers.ts`) mapeaba cualquier error no-timeout a `internal_error` (503) — un reintento legítimo del mismo vale ya aceptado quedaba atrapado en 503 para siempre. Corrección: `accept()` distingue `<` (stale, de verdad) de `===` con la MISMA firma (`accepted:true, reused:true`, sin nueva línea en el log) de `===` con una firma distinta (sigue siendo stale). `channel-service.ts` no vuelve a emitir `usage.voucher_signed` para un accept `reused` (no pasó nada nuevo) y lo propaga en `VoucherAcceptOutcome`/la respuesta JSON de `routes/channel.ts`; `createServerDeliveringSigner` ya trataba `accepted:true` como éxito, así que el fix real es únicamente en `channel-store.ts`. Probado en `channel-store.test.ts` (*"...same amount AND signature...accepted again as reused..."*, *"...same amount but a DIFFERENT signature is still stale..."*, *"...crash-then-retry: the internal hop can be redelivered any number of times..."*), `channel-service.test.ts` (*"a crash-then-retry redelivery of the same voucher is accepted again as reused, and emits usage.voucher_signed only once"*) y `boot.test.ts` (*"a reused:true acceptance (crash-then-retry replay) is treated as success, never thrown"*).
+
+#### Hallazgo 5 (MAJOR) — un RPC caído se confundía con "el canal no existe"
+
+`createStellarChannelRpcPort`/`createServerChannelStatePort` (`config/boot.ts`) atrapaban CUALQUIER excepción de `getChannelState()` en `{found: false}` — un fallo de transporte genuino (DNS, conexión rechazada, timeout de RPC) quedaba indistinguible de "este canal nunca existió", y ambos casos terminaban mapeados a `channel_not_found` (`retryable:false` — `shared/reasons.ts`), cortando el servicio para siempre sobre lo que debería haber sido un 503 transitorio. Corrección: nueva `UpstreamRpcError` (`shared/retry.ts`, hermana de `TimeoutError`); `isChannelNotFoundOnChain()` (`config/boot.ts`, exportada) distingue el `StellarMppError` que `getChannelState()` lanza únicamente cuando una simulación corrió y falló de verdad (nombra el getter y el canal — `node_modules/@stellar/mpp/dist/channel/server/State.js`) de cualquier otra excepción, que ahora se relanza como `UpstreamRpcError`; `agent/routes/vouchers.ts::processBatch` la mapea a `upstream_unavailable` (retryable, 503 + `Retry-After`) igual que ya hacía con un timeout; `channel-service.ts` ya trataba cualquier excepción del `statePort` como `upstream_unavailable` sin cambios. Probado en `boot.test.ts` (`isChannelNotFoundOnChain` con `StellarMppError` vs. `Error`/`TypeError`/`UpstreamRpcError` — forzar un fallo de transporte real de RPC está fuera de alcance para un test unitario) y `vouchers.test.ts` (*"a depositPort transport failure (UpstreamRpcError) maps to upstream_unavailable..."* vs. *"...plain/unexpected error...still maps to internal_error"*).
+
+#### Hallazgo 6 (MAJOR) — `/ready` mentía en 200 con el canal caído
+
+`GET /ready` anotaba `channelStatus:"unavailable"` dentro de un 200 general cuando `CHANNEL_CONTRACT` estaba configurado pero la instancia del canal no — un chequeo de salud automatizado que solo mira el código HTTP nunca se enteraba. Corrección: `server/app.ts` falla el `/ready` completo (503) si el escalón 2 está configurado y la instancia no está `ready`, o si está `ready` pero su `closeMonitor` no está corriendo (`reason:"close_monitor_not_running"`); la ruta `POST /channel/vouchers` (camino de re-arm) arranca el monitor de forma idempotente en cuanto la instancia vuelve a estar lista. Probado en `server/app.test.ts`: *"GET /ready is 503 when the primary boot is ready but the channel instance is not"*, *"...is 503 when the channel instance is ready but its close-monitor is not running"*, *"...is 200 when...AND its close-monitor is running"*, *"POST /channel/vouchers (re-arm path) starts the close-monitor once the channel instance becomes ready"*.
+
+#### Hallazgo 7 (MAJOR) — el cierre se daba por bueno sin confirmar que el recipient cobró
+
+`closeChannel` solo verificaba el reembolso del funder tras el cierre — nunca que el recipient efectivamente recibió el monto liquidado. Corrección: el loop de verificación post-cierre confirma AMBOS deltas (funder Y recipient) con `>=` (no `===`, para que un movimiento de USDC no relacionado nunca haga fallar la aserción); el reembolso esperado del funder se calcula desde el `balanceRaw` on-chain (lo que `close()` realmente reembolsa), no desde el `depositRaw` rastreado por el servidor. Probado en `channel-service.test.ts`: *"closeChannel: success when the post-close funder AND recipient balance deltas both meet their thresholds"* y *"...an unrelated USDC deposit into the funder's account (delta > expected) still counts as closed"*.
+
+#### Hallazgo 8 (MAJOR) — la invariante de respaldo estaba muerta desde su propio diseño
+
+La invariante de respaldo original (`balance > depositRaw` disparaba una alarma) era estructuralmente incapaz de dispararse una vez que `depositRaw` cae al fallback `state.balance` (Lote E, adaptación 2): en ese punto `balance === depositRaw` por construcción, nunca `>`. Corrección: `close-monitor.ts` reemplaza esa invariante por una señal de caída de balance entre polls (`lastKnownBalanceRaw` decreciente sin un cierre propio registrado) que dispara el mismo camino de cierre que la detección primaria de `closeEffectiveAtLedger`. Probado en `close-monitor.test.ts`: *"a balance drop between polls with no close of ours on record is treated as a suspected refund/dispute and drives the close path"*, *"a balance drop that IS our own successful close does not re-alarm or re-trigger"*, *"a balance increase (top-up) between polls never triggers the drop signal"*.
+
+#### Hallazgo 9 (MINOR) — `COMMITMENT_SECRET`/`COMMITMENT_PUBKEY` podían desincronizarse sin aviso
+
+Nada comparaba, al arrancar, que el `COMMITMENT_SECRET` del agente realmente correspondiera al `COMMITMENT_PUBKEY` configurado (mismo error de copy-paste que ya afectó a `COMMITMENT_SECRET` en el Lote E) — el primer síntoma habría sido que el servidor rechazara TODOS los vales como `invalid_signature`. Corrección: `config/env.ts` agrega `COMMITMENT_PUBKEY` (opcional) al esquema del agente — con el `.env` único de este proyecto, el proceso del agente lo ve aunque nunca lo necesitó antes; `config/boot.ts::buildAgentVouchersInstance` compara `Keypair.fromSecret(COMMITMENT_SECRET).rawPublicKey()` contra él cuando está presente (`unavailable`/`commitment_key_mismatch` si no coinciden). **Alcance documentado como limitación** (ver más abajo): del lado del servidor, `getChannelState()` no expone la clave de compromiso que el contrato realmente tiene construida — no hay getter/RPC que la revierta —, así que no existe un cross-check equivalente ahí; queda pendiente una simulación de `close()` a costo cero como posible vía indirecta, no implementada por no ser directa. Probado en `boot.test.ts`: *"unavailable/commitment_key_mismatch when COMMITMENT_PUBKEY does not match COMMITMENT_SECRET's derived key"* y el caso positivo *"a matching COMMITMENT_PUBKEY goes ready"*.
+
+#### Hallazgo 10a (MAJOR) — `close()` se podía invocar con una firma de relleno
+
+Si nunca se aceptó ningún vale para un canal, `closeChannel` igual seguía adelante y llamaba `close()` con un monto/firma placeholder — un `close()` real con datos de relleno contra un contrato en vivo. Corrección: `closeChannel` devuelve `{kind: "nothing_to_close"}` (evento `channel.close_skipped`) y nunca llama a `closePort.close()` cuando `store.getHighest(channel)` es `undefined`. Probado en `channel-service.test.ts`: *"closeChannel: nothing_to_close when no voucher was ever accepted — close() is never called with a placeholder signature"*.
+
+#### Hallazgo 10b (MINOR) — las CLIs de demo no tenían ningún freno de mano contra pubnet
+
+`agent/channel.ts` y `server/channel-admin.ts` son herramientas de demo/testnet — `close`, `close-start`, `refund` mueven fondos reales apenas se apunten a `stellar:pubnet` por un `.env` mal copiado. Además, `top-up` descartaba en silencio el depósito cuando no existía un registro local previo (p.ej. un canal abierto fuera de esta CLI), dejando el registro local ausente para siempre. Corrección: ambas CLIs rechazan CUALQUIER comando contra `stellar:pubnet` con un mensaje explícito (`agent/channel.ts::runChannelCli` antes de despachar el subcomando; `server/channel-admin.ts::main` justo después de parsear el env); `agent/channel.ts`'s `top-up` siembra un registro nuevo (`refundWaitingPeriodLedgers`/`deployLedger` en `0`, un placeholder documentado que ningún código lee de vuelta) cuando no hay uno previo, en vez de descartar el depósito. Probado en `channel.test.ts` (*"runChannelCli refuses every command on stellar:pubnet"*, *"runChannelCli top-up: seeds a fresh record when none exists yet"*) y en el nuevo `channel-admin.test.ts`, que ejecuta el script real como subproceso (el guard corre antes de cualquier llamada RPC, así que nunca toca la red) para probar el rechazo de pubnet sin poder importar `main()` directamente (no está exportado, mismo patrón que `agent/main.ts`).
+
+#### Actualización de limitaciones conocidas (respecto del Lote E)
+
+- La invariante de respaldo del monitor (`balance > depositRaw`) descrita en el Lote E como parte del diseño original YA NO es la que corre: era estructuralmente inerte (hallazgo 8) y fue reemplazada por la señal de caída de balance entre polls — ver hallazgo 8 arriba. No es una limitación nueva, es la corrección de una que no se había notado.
+- El cursor del monitor de eventos sigue sin persistirse entre reinicios (`watchChannel()` no expone un hook para alimentarle uno — Lote E, adaptación 3): esto no cambió en este lote: `close-monitor.ts` sigue sin tocar `persistence/cursor.ts`.
+- Nueva limitación (hallazgo 9): el cross-check de la clave de compromiso solo cubre el lado del agente (`COMMITMENT_SECRET` vs. `COMMITMENT_PUBKEY`, cuando ambos son visibles al proceso). Del lado del servidor no hay un cross-check equivalente porque `getChannelState()` no expone la clave de compromiso que el contrato tiene construida — no hay getter/RPC en este código que la revierta. Una simulación de `close()` a costo cero quedó identificada como posible vía indirecta pero no se implementó (no es directa y el escalón 2 ya defiende esta superficie por otro lado: `verifyCommitmentSignature` rechaza cualquier firma que no verifique contra `COMMITMENT_PUBKEY`).
