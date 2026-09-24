@@ -15,6 +15,7 @@
 
 import { CosmoPayService } from "../src/services/CosmoPayService.ts";
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
+import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
@@ -103,7 +104,8 @@ async function runCosmoPayDemo() {
   const session: ConnectivitySession = createConnectivitySession({
     id: "sess_cosmopay_2026",
     userId: "user_danipalermo",
-    channelId: "channel_cosmopay_123",
+    // Formato de contrato Soroban válido (C + 55 base32): lo exige el M1 de POST /vouchers.
+    channelId: "CCOSMOPAYDEMOCANALAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
@@ -114,6 +116,10 @@ async function runCosmoPayDemo() {
     provider: mockTelnyxProvider,
     balancePort: balanceAdapter,
     pricePerMbRaw: 1_000_000n, // 1 USDC por MB
+    // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
+    voucherPort: createInMemoryVoucherPort({ depositRaw: initialChannelDepositRaw }),
+    network: "stellar:testnet",
+    voucherPricePerMibRaw: 1_048_576n, // mismo precio que 1 USDC/MB, expresado por MiB
     meterConfig: {
       chunkSizeBytes: 1_000_000,
       maxUnpaidQuotaBytes: 1_000_000,

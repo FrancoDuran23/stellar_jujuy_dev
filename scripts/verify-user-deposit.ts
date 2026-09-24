@@ -9,6 +9,7 @@
  */
 
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
+import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
 import { createConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
@@ -103,7 +104,8 @@ async function activateDataSession(amountStr: string) {
   const session = createConnectivitySession({
     id: "sess_daniPalermo_testnet",
     userId: "daniPalermo",
-    channelId: "channel_daniPalermo",
+    // Formato de contrato Soroban válido (C + 55 base32): lo exige el M1 de POST /vouchers.
+    channelId: "CDANIPALERMOCANALAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
@@ -114,6 +116,10 @@ async function activateDataSession(amountStr: string) {
     provider: mockTelnyxProvider,
     balancePort: balanceAdapter,
     pricePerMbRaw: 1_000_000n,
+    // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
+    voucherPort: createInMemoryVoucherPort({ depositRaw: rawUnits }),
+    network: "stellar:testnet",
+    voucherPricePerMibRaw: 1_048_576n, // mismo precio que 1 USDC/MB, expresado por MiB
     meterConfig: { chunkSizeBytes: 1_000_000, maxUnpaidQuotaBytes: 1_000_000 },
     logger: (line) => console.log(`   ${line}`),
   });

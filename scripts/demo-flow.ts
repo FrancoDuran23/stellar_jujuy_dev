@@ -12,6 +12,7 @@
  */
 
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
+import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
@@ -68,7 +69,8 @@ async function runDemoFlow() {
   const session: ConnectivitySession = createConnectivitySession({
     id: "sess_brasil_2026",
     userId: "user_argentino_123",
-    channelId: "C_CANAL_SOROBAN_123",
+    // Formato de contrato Soroban válido (C + 55 base32): lo exige el M1 de POST /vouchers.
+    channelId: "CDEMOCANALSOROBANJUJUYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
@@ -80,6 +82,10 @@ async function runDemoFlow() {
     provider: mockTelnyxProvider,
     balancePort: balanceAdapter,
     pricePerMbRaw: 1_000_000n, // 1 USDC por MB (1,000,000 raw units)
+    // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
+    voucherPort: createInMemoryVoucherPort({ depositRaw: initialChannelDepositRaw }),
+    network: "stellar:testnet",
+    voucherPricePerMibRaw: 1_048_576n, // mismo precio que 1 USDC/MB, expresado por MiB
     meterConfig: {
       chunkSizeBytes: 1_000_000,
       maxUnpaidQuotaBytes: 1_000_000,

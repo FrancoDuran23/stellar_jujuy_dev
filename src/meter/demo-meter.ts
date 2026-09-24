@@ -1,8 +1,10 @@
 /**
  * Módulo 1: Medidor y Conectividad (Demo / Prototipo Inicial)
  * 
- * Este script simula la captura y conteo de bytes de tráfico de red (Capa 3 / VPN)
- * e integra la solicitud de vales acumulativos (vouchers) contra el agente de pagos MPP.
+ * Este script simula la captura y conteo de bytes de tráfico de red (Capa 3 / VPN).
+ * La solicitud de vales acumulativos (vouchers) contra el agente de pagos MPP la
+ * hace `IntegratedMeterService` (meter-service.ts) vía `VoucherPort`
+ * (voucher-port.ts): `creditPaidQuota` solo se llama allí con un vale firmado.
  */
 
 export interface MeterConfig {
