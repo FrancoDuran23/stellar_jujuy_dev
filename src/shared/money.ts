@@ -75,3 +75,29 @@ export function computeChargeDeltaRaw(
   const previous = computeExpectedAmountRaw(cumulativeBytesPrevious, pricePerMibRaw);
   return now - previous;
 }
+
+const BYTES_PER_MB = 1_000_000n;
+
+/**
+ * Converts a price per decimal MB (the Telnyx policy's
+ * `TELNYX_PRICE_PER_MB_USDC`, 1 MB = 1_000_000 bytes) into the agent's price
+ * per MiB (`PRICE_PER_MIB_RAW`, 1 MiB = 1_048_576 bytes), rounding up. Both
+ * sides must bill the same tariff or the agent and the policy disagree on
+ * when the channel runs out.
+ */
+export function pricePerMibFromPerMbRaw(pricePerMbRaw: bigint): bigint {
+  if (pricePerMbRaw <= 0n) {
+    throw new RangeError("pricePerMibFromPerMbRaw: pricePerMbRaw must be positive");
+  }
+  return ceilDiv(pricePerMbRaw * BYTES_PER_MIB, BYTES_PER_MB);
+}
+
+/**
+ * True when a per-MB price and a per-MiB price describe the same tariff, up
+ * to the one raw unit per MiB that an integer conversion can lose (so both
+ * the floor and the ceiling of the exact conversion are accepted).
+ */
+export function arePricesAligned(pricePerMbRaw: bigint, pricePerMibRaw: bigint): boolean {
+  const diff = pricePerMibRaw * BYTES_PER_MB - pricePerMbRaw * BYTES_PER_MIB;
+  return (diff < 0n ? -diff : diff) < BYTES_PER_MB;
+}
