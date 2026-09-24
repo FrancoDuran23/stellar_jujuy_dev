@@ -16,6 +16,7 @@
 import { CosmoPayService } from "../src/services/CosmoPayService.ts";
 import { IntegratedMeterService, createStellarChannelBalanceAdapter } from "../src/meter/meter-service.ts";
 import { createInMemoryVoucherPort } from "../src/meter/voucher-port.ts";
+import { pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
 import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
@@ -65,7 +66,8 @@ async function runCosmoPayDemo() {
   console.log("=======================================================================\n");
 
   // 3. Inicializar el canal Soroban y el medidor de datos con los $5.00 USDC depositados
-  const initialChannelDepositRaw = 5_000_000n; // $5.00 USDC (5 MB a 1 USDC/MB)
+  const initialChannelDepositRaw = 50_000_000n; // $5.00 USDC en raw units, 1 raw = 1e-7 USDC (5 MB a 1 USDC/MB)
+  const pricePerMbRaw = 10_000_000n; // 1 USDC por MB
   const channelStatePort: ChannelStatePort = {
     async getChannelInfo(_channel: string) {
       return {
@@ -115,11 +117,11 @@ async function runCosmoPayDemo() {
     session,
     provider: mockTelnyxProvider,
     balancePort: balanceAdapter,
-    pricePerMbRaw: 1_000_000n, // 1 USDC por MB
+    pricePerMbRaw,
     // Vales offline: doble en memoria del agente de pagos (POST /vouchers)
     voucherPort: createInMemoryVoucherPort({ depositRaw: initialChannelDepositRaw }),
     network: "stellar:testnet",
-    voucherPricePerMibRaw: 1_048_576n, // = pricePerMbRaw (1_000_000 raw/MB) expresado por MiB
+    voucherPricePerMibRaw: pricePerMibFromPerMbRaw(pricePerMbRaw), // misma tarifa, expresada por MiB
     meterConfig: {
       chunkSizeBytes: 1_000_000,
       maxUnpaidQuotaBytes: 1_000_000,
