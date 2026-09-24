@@ -25,6 +25,7 @@ import type { ConnectivityProvider } from "../providers/connectivity/Connectivit
 import type { ConnectivitySession } from "../models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../server/channel-service.ts";
 import type { Message2Signed, Message2Unsigned } from "../shared/messages.ts";
+import { arePricesAligned, pricePerMibFromPerMbRaw } from "../shared/money.ts";
 import type { Network } from "../shared/stellar/network.ts";
 import { buildMessage1, type VoucherPort } from "./voucher-port.ts";
 
@@ -58,7 +59,8 @@ export interface MeterServiceOptions {
    * `PRICE_PER_MIB_RAW` del agente (raw units por MiB = 1_048_576 bytes).
    * Es el precio del VALE y debe ser idéntico al del agente (CF-R2), o el
    * agente responde `amount_rejected`. Distinto de `pricePerMbRaw`, que es
-   * el precio por MB decimal que usa la política de Telnyx.
+   * el precio por MB decimal que usa la política de Telnyx; ambos tienen que
+   * ser la misma tarifa (`arePricesAligned`) o el constructor lanza.
    */
   voucherPricePerMibRaw: bigint;
   meterConfig?: Partial<MeterConfig>;
@@ -91,6 +93,15 @@ export class IntegratedMeterService {
   private readingSeq = 0;
 
   constructor(opts: MeterServiceOptions) {
+    // Agente (por MiB) y política (por MB) deben cobrar la misma tarifa, o no
+    // coinciden en cuándo se agota el canal.
+    if (!arePricesAligned(opts.pricePerMbRaw, opts.voucherPricePerMibRaw)) {
+      throw new RangeError(
+        `IntegratedMeterService: precios desalineados — pricePerMbRaw=${opts.pricePerMbRaw} (política, por MB) ` +
+          `y voucherPricePerMibRaw=${opts.voucherPricePerMibRaw} (agente, por MiB) no son la misma tarifa; ` +
+          `se esperaba voucherPricePerMibRaw=${pricePerMibFromPerMbRaw(opts.pricePerMbRaw)}`,
+      );
+    }
     this.session = opts.session;
     this.provider = opts.provider;
     this.balancePort = opts.balancePort;

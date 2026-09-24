@@ -127,7 +127,7 @@ test("IntegratedMeterService: procesa tráfico dentro del saldo y mantiene la co
 
   const fakeBalancePort = {
     async getChannelBalance() {
-      return 10_000_000n; // 10 USDC en raw units
+      return 10_000_000n; // 1 USDC en raw units
     },
   };
 
@@ -135,7 +135,7 @@ test("IntegratedMeterService: procesa tráfico dentro del saldo y mantiene la co
     session,
     provider: fakeProvider,
     balancePort: fakeBalancePort,
-    pricePerMbRaw: 1_000_000n, // 1 USDC por MB
+    pricePerMbRaw: 1_000_000n, // 0.1 USDC por MB
     ...voucherOptions(10_000_000n),
     logger: () => {},
   });
@@ -176,7 +176,7 @@ test("IntegratedMeterService: deshabilita la SIM si el consumo agota el saldo de
 
   const fakeBalancePort = {
     async getChannelBalance() {
-      return 1_000_000n; // Saldo muy pequeño: 1 USDC (1 MB)
+      return 1_000_000n; // Saldo muy pequeño: 0.1 USDC (1 MB)
     },
   };
 
@@ -184,7 +184,7 @@ test("IntegratedMeterService: deshabilita la SIM si el consumo agota el saldo de
     session,
     provider: fakeProvider,
     balancePort: fakeBalancePort,
-    pricePerMbRaw: 1_000_000n, // 1 USDC por MB
+    pricePerMbRaw: 1_000_000n, // 0.1 USDC por MB
     ...voucherOptions(10_000_000n),
     logger: () => {},
   });
@@ -448,4 +448,40 @@ test("IntegratedMeterService: un vale firmado por menos del acumulado pedido no 
   const res = await service.processTraffic(500_000);
   assert.equal(res.voucher.kind, "unavailable");
   assert.equal(res.meterStatus.paidQuotaBytes, 0);
+});
+
+test("IntegratedMeterService: rechaza precios desalineados entre la política (MB) y el agente (MiB)", () => {
+  const session = createConnectivitySession({
+    id: "sess_1",
+    userId: "user_1",
+    channelId: CHANNEL,
+    simCardId: "sim_123",
+    iccid: "89551...",
+  });
+  const provider: ConnectivityProvider = {
+    async purchaseEsim() {
+      return { simCardId: "sim_123", iccid: "89551...", activationCode: "LPA:1$x$y" };
+    },
+    async enable() {},
+    async disable() {},
+    async setDataLimit() {},
+    async getUsage() {
+      return { mb: 0, status: "enabled" };
+    },
+  };
+
+  // PRICE_PER_MIB_RAW cargado con el número por MB: el error típico.
+  assert.throws(
+    () =>
+      new IntegratedMeterService({
+        session,
+        provider,
+        balancePort: { async getChannelBalance() { return 10_000_000n; } },
+        pricePerMbRaw: 1_000_000n,
+        ...voucherOptions(10_000_000n),
+        voucherPricePerMibRaw: 1_000_000n,
+        logger: () => {},
+      }),
+    /precios desalineados.*se esperaba voucherPricePerMibRaw=1048576/,
+  );
 });

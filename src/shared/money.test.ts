@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ceilDiv, computeChargeDeltaRaw, computeExpectedAmountRaw, parseNonNegativeIntegerRaw } from "./money.ts";
+import {
+  arePricesAligned,
+  ceilDiv,
+  computeChargeDeltaRaw,
+  computeExpectedAmountRaw,
+  parseNonNegativeIntegerRaw,
+  pricePerMibFromPerMbRaw,
+} from "./money.ts";
 
 const PRICE_PER_MIB_RAW = 10_000n;
 const MIB = 1048576n;
@@ -89,4 +96,31 @@ test("parseNonNegativeIntegerRaw rejects non-digit input, leading zeros, decimal
   for (const value of ["abc", "007", "1.5", "-1", "", " 1", "1 ", "0x1"]) {
     assert.equal(parseNonNegativeIntegerRaw(value), undefined, `expected undefined for ${JSON.stringify(value)}`);
   }
+});
+
+test("pricePerMibFromPerMbRaw converts exact tariffs without rounding", () => {
+  assert.equal(pricePerMibFromPerMbRaw(1_000_000n), 1_048_576n);
+  assert.equal(pricePerMibFromPerMbRaw(10_000_000n), 10_485_760n);
+  assert.equal(pricePerMibFromPerMbRaw(125_000n), 131_072n); // Telnyx floor, 0.0125 USDC/MB
+});
+
+test("pricePerMibFromPerMbRaw rounds a non-exact tariff up", () => {
+  // 1 raw/MB = 1.048576 raw/MiB -> 2
+  assert.equal(pricePerMibFromPerMbRaw(1n), 2n);
+});
+
+test("pricePerMibFromPerMbRaw rejects a non-positive price", () => {
+  assert.throws(() => pricePerMibFromPerMbRaw(0n), RangeError);
+});
+
+test("arePricesAligned accepts the floor and the ceiling of the exact conversion", () => {
+  assert.equal(arePricesAligned(1_000_000n, 1_048_576n), true);
+  assert.equal(arePricesAligned(1n, 1n), true);
+  assert.equal(arePricesAligned(1n, 2n), true);
+});
+
+test("arePricesAligned rejects a per-MiB price that is really the per-MB number", () => {
+  // The classic mistake: PRICE_PER_MIB_RAW set to the per-MB figure.
+  assert.equal(arePricesAligned(1_000_000n, 1_000_000n), false);
+  assert.equal(arePricesAligned(10_000_000n, 1_048_576n), false);
 });
