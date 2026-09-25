@@ -41,15 +41,18 @@ export default function TopUpModal({ onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-textprimary/20 backdrop-blur-sm"
+        className="absolute inset-0 bg-textprimary/30 backdrop-blur-sm"
         onClick={onClose}
       />
 
-      {/* Modal card */}
-      <div className="relative z-10 w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-3xl border border-cardborder shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 sm:p-7 flex flex-col gap-6">
+      {/* Modal / Bottom-sheet card */}
+      <div className="relative z-10 w-full max-w-md max-h-[85vh] sm:max-h-[90vh] overflow-y-auto bg-white rounded-t-3xl sm:rounded-3xl border border-cardborder shadow-[0_-10px_40px_rgba(25,24,29,0.15)] sm:shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 sm:p-7 flex flex-col gap-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 bg-cardborder rounded-full mx-auto -mt-2 mb-1 sm:hidden" />
+
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-display text-xl font-bold text-textprimary">Recargar saldo</h3>
