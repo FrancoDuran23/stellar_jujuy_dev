@@ -1,23 +1,30 @@
-import { useSystemStatus } from '../hooks/useSystemStatus'
+import { useMission } from '../hooks/useMission'
 
 export default function SystemBadge() {
-  const { backend, isDemo } = useSystemStatus()
+  const { caps, backendError, isDemoMode } = useMission()
 
-  if (backend === 'checking') return null
-
-  if (backend === 'offline' || isDemo) {
+  if (isDemoMode) {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-stellar/20 border border-stellar/40 text-[10px] font-mono font-bold text-textprimary tracking-wider uppercase">
-        <span className="w-1.5 h-1.5 rounded-full bg-stellar animate-pulse" />
-        MODO DEMO
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-[10px] font-mono font-bold text-amber-600 tracking-wider uppercase">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+        MODO DEMO · SIN OPERACIONES REALES
+      </span>
+    )
+  }
+
+  if (backendError || !caps || !caps.backendAvailable) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-alerta/10 border border-alerta/30 text-[10px] font-mono font-bold text-alerta tracking-wider uppercase">
+        <span className="w-1.5 h-1.5 rounded-full bg-alerta" />
+        BACKEND NO DISPONIBLE
       </span>
     )
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-online/10 border border-online/30 text-[10px] font-mono font-bold text-online tracking-wider uppercase">
+    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-online/10 border border-online/30 text-[10px] font-mono font-bold text-online tracking-wider uppercase">
       <span className="w-1.5 h-1.5 rounded-full bg-online animate-pulse" />
-      BACKEND ACTIVO
+      API {caps.citrusReady ? 'LIVE' : 'CONECTADA'}
     </span>
   )
 }

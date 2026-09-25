@@ -1,59 +1,50 @@
-import type { MissionService } from './MissionService'
-import type { Mission, MissionState, PublicEsimInfo, UsageEvent, WizardData } from '../types/mission'
+import { envConfig } from '../config/env'
+import type {
+  BackendCapabilities,
+  FinishResult,
+  Mission,
+  PaymentConfirmationResult,
+  PaymentIntentInfo,
+  PublicEsimInfo,
+  WizardData,
+} from '../types/mission'
 
-const BASE_URL = '/api'
-const STORAGE_KEY = 'astroam:realMissionState'
+const MISSION_ID_KEY = 'astroam_mission_id'
 
 function getAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem('astroam_token')
-  const headers: Record<string, string> = {
+  return {
     'Content-Type': 'application/json',
   }
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
-  return headers
 }
 
-export type Capabilities = {
-  backendAvailable: boolean
-  network: string
-  stage: number
-  channelConfigured: boolean
-  voucherAgentAvailable: boolean
-  cosmoPayStatus: 'live' | 'mock' | 'unavailable'
-  citrusStatus: 'live' | 'unavailable'
-  connectivityProvider: 'fake' | 'citrus'
-  demoTrafficEnabled: boolean
-  mode: 'live' | 'partial' | 'demo'
-  liveEnabled: boolean
-  requiresAuth: boolean
-}
-
-export class ApiMissionService implements MissionService {
-  constructor() {
-    this.loadFromStorage()
-  }
-
-  private loadFromStorage(): MissionState {
+async function handleResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let message = `HTTP ${res.status}: ${res.statusText}`
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return { mission: null, events: [] }
-      return JSON.parse(raw) as MissionState
+      const body = (await res.json()) as { message?: string; error?: string }
+      message = body.message || body.error || message
     } catch {
-      return { mission: null, events: [] }
+      // Ignore json parse error
     }
+    const err = new Error(message)
+    ;(err as unknown as { statusCode: number }).statusCode = res.status
+    throw err
+  }
+  return (await res.json()) as T
+}
+
+export class ApiMissionService {
+  private get baseUrl(): string {
+    return envConfig.apiBaseUrl
   }
 
-  private saveToStorage(state: MissionState): void {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }
-
-  async fetchCapabilities(): Promise<Capabilities | null> {
+  async fetchCapabilities(): Promise<BackendCapabilities | null> {
     try {
-      const res = await fetch(`${BASE_URL}/capabilities`)
+      const res = await fetch(`${this.baseUrl}/capabilities`, {
+        credentials: 'include',
+      })
       if (!res.ok) return null
-      return (await res.json()) as Capabilities
+      return await res.json()
     } catch {
       return null
     }
@@ -62,12 +53,12 @@ export class ApiMissionService implements MissionService {
   async createMission(data: WizardData): Promise<Mission> {
     if (!data.destination) throw new Error('No destination selected')
 
-    // 1. POST /api/missions
-    const createRes = await fetch(`${BASE_URL}/missions`, {
+    const res = await fetch(`${this.baseUrl}/missions`, {
       method: 'POST',
       headers: getAuthHeaders(),
+      credentials: 'include',
       body: JSON.stringify({
-        userId: 'usr_demo',
+        userId: 'usr_astroam',
         destination: data.destination,
         startDate: data.startDate,
         endDate: data.endDate,
@@ -78,62 +69,11 @@ export class ApiMissionService implements MissionService {
       }),
     })
 
-    if (!createRes.ok) {
-      const err = await createRes.json()
-      throw new Error(err.message || 'Error al crear la misión en la API')
-    }
-
-    const { id: missionId } = (await createRes.json()) as { id: string }
-
-    // 2. Create Payment Intent
-    const intentRes = await fetch(`${BASE_URL}/missions/${missionId}/payment-intent`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-    })
-
-    if (!intentRes.ok) {
-      const err = await intentRes.json()
-      throw new Error(err.message || 'Error al generar intención de pago CosmoPay')
-    }
-
-    const intent = (await intentRes.json()) as { intentId: string; isMock: boolean }
-
-    // 3. Confirm Payment (Auto-confirm for demo/mock or real txHash)
-    const txHash = intent.isMock
-      ? `0xreal_cosmopay_${Date.now().toString(16)}`
-      : `0xreal_tx_${Date.now().toString(16)}`
-
-    const confirmRes = await fetch(`${BASE_URL}/missions/${missionId}/payment-confirmation`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ intentId: intent.intentId, txHash }),
-    })
-
-    if (!confirmRes.ok) {
-      const err = await confirmRes.json()
-      throw new Error(err.message || 'Error al confirmar pago')
-    }
-
-    // 4. Activate Mission
-    const activateRes = await fetch(`${BASE_URL}/missions/${missionId}/activate`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-    })
-
-    if (!activateRes.ok) {
-      const err = await activateRes.json()
-      throw new Error(err.message || 'Error al activar misión')
-    }
-
-    const activeData = (await activateRes.json()) as {
-      missionId: string
-      status: string
-      isMock?: boolean
-      esim?: PublicEsimInfo
-    }
+    const created = await handleResponse<{ id: string; status: string }>(res)
+    localStorage.setItem(MISSION_ID_KEY, created.id)
 
     const mission: Mission = {
-      id: missionId,
+      id: created.id,
       origin: 'Argentina',
       destination: data.destination,
       startDate: data.startDate,
@@ -143,171 +83,136 @@ export class ApiMissionService implements MissionService {
       dailyLimitUsdc: data.dailyLimitUsdc,
       alertAt20pct: data.alertAt20pct,
       autoPauseAtLimit: data.autoPauseAtLimit,
-      status: 'active',
+      status: 'pending_payment',
+      paymentStatus: 'pending',
       balanceUsdc: data.budgetUsdc,
       consumedUsdc: 0,
       consumedMb: 0,
-      esimStatus: 'active',
+      esimStatus: 'not_provisioned',
       network: 'stellar:testnet',
-      channelId: `SOROBAN-${missionId}`,
-      iccid: activeData.esim?.iccid,
-      esim: activeData.esim,
-      isMock: activeData.isMock,
+      channelId: '',
       createdAt: new Date().toISOString(),
     }
 
-    const state: MissionState = { mission, events: [] }
-    this.saveToStorage(state)
     return mission
   }
 
-  loadState(): MissionState {
-    return this.loadFromStorage()
-  }
-
-  saveState(state: MissionState): void {
-    this.saveToStorage(state)
-  }
-
-  simulateConsumption(state: MissionState): MissionState {
-    const { mission } = state
-    if (!mission) return state
-
-    // Trigger async demo-traffic injection if enabled
-    void fetch(`${BASE_URL}/missions/${mission.id}/demo-traffic`, {
+  async createPaymentIntent(missionId: string): Promise<PaymentIntentInfo> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/payment-intent`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ bytes: 500_000 }),
+      credentials: 'include',
     })
-
-    const mb = 0.5
-    const cost = parseFloat((mb * mission.destination.pricePerMbUsdc).toFixed(6))
-    const newBalance = Math.max(0, parseFloat((mission.balanceUsdc - cost).toFixed(6)))
-    const newConsumedMb = parseFloat((mission.consumedMb + mb).toFixed(2))
-    const newConsumedUsdc = parseFloat((mission.consumedUsdc + cost).toFixed(6))
-
-    const event: UsageEvent = {
-      id: `ev_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      mb,
-      amountUsdc: cost,
-      status: 'liquidated',
-      txId: `real-tx-${Date.now().toString(16)}`,
-    }
-
-    const updatedMission: Mission = {
-      ...mission,
-      balanceUsdc: newBalance,
-      consumedUsdc: newConsumedUsdc,
-      consumedMb: newConsumedMb,
-      esimStatus: newBalance <= 0 ? 'paused' : mission.esimStatus,
-      status: newBalance <= 0 ? 'paused' : mission.status,
-    }
-
-    const newState: MissionState = {
-      mission: updatedMission,
-      events: [event, ...state.events],
-    }
-    this.saveToStorage(newState)
-    return newState
+    return handleResponse<PaymentIntentInfo>(res)
   }
 
-  topUp(state: MissionState, amountUsdc: number): MissionState {
-    const { mission } = state
-    if (!mission) return state
-
-    // Trigger async topup intent & confirmation
-    void (async () => {
-      try {
-        const intentRes = await fetch(`${BASE_URL}/missions/${mission.id}/topups/payment-intent`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({ amountUsdc }),
-        })
-        if (!intentRes.ok) return
-        const intent = (await intentRes.json()) as { intentId: string }
-
-        await fetch(`${BASE_URL}/missions/${mission.id}/topups/payment-confirmation`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({ intentId: intent.intentId, txHash: `0xtopup_${Date.now()}` }),
-        })
-      } catch {
-        // Fallback
-      }
-    })()
-
-    const newBalance = parseFloat((mission.balanceUsdc + amountUsdc).toFixed(6))
-    const updatedMission: Mission = {
-      ...mission,
-      balanceUsdc: newBalance,
-      budgetUsdc: mission.budgetUsdc + amountUsdc,
-      status: mission.status === 'paused' && mission.esimStatus !== 'paused' ? 'active' : mission.status,
-      esimStatus: mission.esimStatus === 'disabled' ? 'active' : mission.esimStatus,
-    }
-
-    const topupEvent: UsageEvent = {
-      id: `top_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      mb: 0,
-      amountUsdc,
-      status: 'liquidated',
-      txId: `real-tx-${Date.now().toString(16)}`,
-    }
-
-    const newState: MissionState = {
-      mission: updatedMission,
-      events: [topupEvent, ...state.events],
-    }
-    this.saveToStorage(newState)
-    return newState
-  }
-
-  togglePause(state: MissionState): MissionState {
-    const { mission } = state
-    if (!mission) return state
-
-    const isPaused = mission.esimStatus === 'paused'
-    const endpoint = isPaused ? 'resume' : 'pause'
-
-    void fetch(`${BASE_URL}/missions/${mission.id}/${endpoint}`, {
+  async confirmPayment(missionId: string, intentId: string, txHash: string): Promise<PaymentConfirmationResult> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/payment-confirmation`, {
       method: 'POST',
       headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ intentId, txHash }),
     })
-
-    const updatedMission: Mission = {
-      ...mission,
-      esimStatus: isPaused ? 'active' : 'paused',
-      status: isPaused ? 'active' : 'paused',
-      esim: mission.esim ? { ...mission.esim, status: isPaused ? 'active' : 'suspended' } : undefined,
-    }
-
-    const newState: MissionState = { mission: updatedMission, events: state.events }
-    this.saveToStorage(newState)
-    return newState
+    return handleResponse<PaymentConfirmationResult>(res)
   }
 
-  completeMission(state: MissionState): MissionState {
-    const { mission } = state
-    if (!mission) return state
-
-    void fetch(`${BASE_URL}/missions/${mission.id}/finish`, {
+  async activateMission(missionId: string): Promise<{ missionId: string; status: string; isMock?: boolean; esim?: PublicEsimInfo }> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/activate`, {
       method: 'POST',
       headers: getAuthHeaders(),
+      credentials: 'include',
     })
-
-    const updatedMission: Mission = {
-      ...mission,
-      status: 'completed',
-      esimStatus: 'disabled',
-    }
-
-    const newState: MissionState = { mission: updatedMission, events: state.events }
-    this.saveToStorage(newState)
-    return newState
+    return handleResponse<{ missionId: string; status: string; isMock?: boolean; esim?: PublicEsimInfo }>(res)
   }
 
-  resetDemo(): void {
-    localStorage.removeItem(STORAGE_KEY)
+  async getMission(missionId: string): Promise<Mission> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}`, {
+      credentials: 'include',
+    })
+    return handleResponse<Mission>(res)
+  }
+
+  async getUsage(missionId: string): Promise<{
+    chargedMicroUsd: string
+    tripChargedMicroUsd?: string
+    walletMicroUsd: string
+    providerStatus: string
+    meteredBytes: string
+    carrierBytes: string
+    differenceBytes: string
+    isEstimation: boolean
+    note: string
+  }> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/usage`, {
+      credentials: 'include',
+    })
+    return handleResponse(res)
+  }
+
+  async pauseMission(missionId: string): Promise<{ status: string; esimStatus: string }> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/pause`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    })
+    return handleResponse<{ status: string; esimStatus: string }>(res)
+  }
+
+  async resumeMission(missionId: string): Promise<{ status: string; esimStatus: string }> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/resume`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    })
+    return handleResponse<{ status: string; esimStatus: string }>(res)
+  }
+
+  async createTopUpIntent(missionId: string, amountUsdc: number): Promise<PaymentIntentInfo> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/topups/payment-intent`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ amountUsdc }),
+    })
+    return handleResponse<PaymentIntentInfo>(res)
+  }
+
+  async confirmTopUpPayment(missionId: string, intentId: string, txHash: string): Promise<PaymentConfirmationResult & { balanceUsdc?: number }> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/topups/payment-confirmation`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ intentId, txHash }),
+    })
+    return handleResponse<PaymentConfirmationResult & { balanceUsdc?: number }>(res)
+  }
+
+  async finishMission(missionId: string): Promise<FinishResult> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/finish`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    })
+    return handleResponse<FinishResult>(res)
+  }
+
+  async triggerDemoTraffic(missionId: string, bytes = 500_000): Promise<unknown> {
+    const res = await fetch(`${this.baseUrl}/missions/${missionId}/demo-traffic`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ bytes }),
+    })
+    return handleResponse(res)
+  }
+
+  getSavedMissionId(): string | null {
+    return localStorage.getItem(MISSION_ID_KEY)
+  }
+
+  clearSavedMissionId(): void {
+    localStorage.removeItem(MISSION_ID_KEY)
   }
 }
+
+export const apiMissionService = new ApiMissionService()

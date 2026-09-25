@@ -8,24 +8,39 @@ import ActivityFeed from '../components/dashboard/ActivityFeed'
 import TopUpModal from '../components/dashboard/TopUpModal'
 import { useMission } from '../hooks/useMission'
 import { fmtDate, fmtUsdc, fmtMb } from '../utils/missionUtils'
+import type { FinishResult } from '../types/mission'
 
 export default function ActiveMissionPage() {
   const navigate = useNavigate()
-  const { mission, events, simulate, topUp, togglePause, complete, reset } = useMission()
+  const {
+    mission,
+    events,
+    caps,
+    actionLoading,
+    isDemoMode,
+    simulate,
+    togglePause,
+    finish,
+    reset,
+  } = useMission()
+
   const [showTopUp, setShowTopUp] = useState(false)
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false)
+  const [finishResult, setFinishResult] = useState<FinishResult | null>(null)
   const [flash, setFlash] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Redirect if no mission
   useEffect(() => {
-    if (!mission) {
+    if (!mission && !isDemoMode) {
       navigate('/mission/new', { replace: true })
     }
-  }, [mission, navigate])
+  }, [mission, isDemoMode, navigate])
 
   if (!mission) return null
 
-  const isPaused = mission.esimStatus === 'paused'
+  const isPaused = mission.esimStatus === 'paused' || mission.status === 'paused'
+  const isClosing = mission.status === 'closing' || mission.status === 'refund_pending'
   const isCompleted = mission.status === 'completed'
   const pctRemaining = mission.budgetUsdc > 0
     ? (mission.balanceUsdc / mission.budgetUsdc) * 100
@@ -33,13 +48,18 @@ export default function ActiveMissionPage() {
 
   function handleSimulate() {
     setFlash(true)
-    simulate()
+    void simulate()
     setTimeout(() => setFlash(false), 400)
   }
 
-  function handleComplete() {
-    complete()
-    setShowCompleteConfirm(false)
+  async function handleCompleteSubmit() {
+    setError(null)
+    try {
+      const res = await finish()
+      setFinishResult(res)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al finalizar la misión')
+    }
   }
 
   function handleReset() {
@@ -49,12 +69,21 @@ export default function ActiveMissionPage() {
 
   const statusColor = isCompleted
     ? 'text-textsecondary'
-    : isPaused
-      ? 'text-stellar'
-      : 'text-online'
+    : isClosing
+      ? 'text-amber-500'
+      : isPaused
+        ? 'text-stellar'
+        : 'text-online'
 
-  const statusLabel = isCompleted ? 'MISIÓN FINALIZADA' : isPaused ? 'DATOS PAUSADOS' : 'CONEXIÓN ACTIVA'
-  const providerLabel = mission.isMock !== false ? 'Citrus Mobile (Simulado)' : 'Citrus Mobile'
+  const statusLabel = isCompleted
+    ? 'MISIÓN FINALIZADA'
+    : isClosing
+      ? 'LIQUIDANDO Y REINTEGRANDO SALDO'
+      : isPaused
+        ? 'DATOS PAUSADOS'
+        : 'CONEXIÓN ACTIVA'
+
+  const providerLabel = isDemoMode || mission.isMock !== false ? 'Citrus Mobile (Simulado)' : 'Citrus Mobile'
   const iccidDisplay = mission.iccid || mission.esim?.iccid || 'iccid_unknown'
 
   return (
@@ -68,40 +97,82 @@ export default function ActiveMissionPage() {
 
       {/* Top-up modal */}
       {showTopUp && (
-        <TopUpModal
-          onTopUp={topUp}
-          onClose={() => setShowTopUp(false)}
-        />
+        <TopUpModal onClose={() => setShowTopUp(false)} />
       )}
 
-      {/* Complete confirmation */}
+      {/* Finish / Complete Modal */}
       {showCompleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-textprimary/20 backdrop-blur-sm"
-            onClick={() => setShowCompleteConfirm(false)}
+            onClick={() => !actionLoading && setShowCompleteConfirm(false)}
           />
-          <div className="relative z-10 w-full max-w-sm max-h-[90vh] overflow-y-auto bg-white rounded-3xl border border-cardborder shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 sm:p-7 flex flex-col gap-5">
-            <h3 className="font-display text-xl font-bold text-textprimary">¿Finalizar misión?</h3>
-            <p className="text-sm text-textsecondary leading-relaxed">
-              Tu eSIM se desactivará y se ejecutará el cierre del canal Soroban. El saldo no consumido quedará liberado.
-            </p>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setShowCompleteConfirm(false)}
-                className="flex-1 py-3 rounded-full border border-cardborder bg-white text-textsecondary font-sans font-semibold text-xs uppercase tracking-wider hover:bg-bglight transition-all"
-              >
-                CANCELAR
-              </button>
-              <button
-                type="button"
-                onClick={handleComplete}
-                className="flex-1 py-3 rounded-full bg-alerta text-white font-sans font-bold text-xs uppercase tracking-wider hover:opacity-90 transition-all"
-              >
-                FINALIZAR
-              </button>
-            </div>
+          <div className="relative z-10 w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-3xl border border-cardborder shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 sm:p-7 flex flex-col gap-5">
+            {!finishResult ? (
+              <>
+                <h3 className="font-display text-xl font-bold text-textprimary">¿Finalizar misión?</h3>
+                <p className="text-sm text-textsecondary leading-relaxed">
+                  Tu eSIM se desactivará, se calculará el consumo final y se reembolsará el saldo remanente a tu wallet vía Soroban.
+                </p>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => setShowCompleteConfirm(false)}
+                    className="flex-1 py-3 rounded-full border border-cardborder bg-white text-textsecondary font-sans font-semibold text-xs uppercase tracking-wider hover:bg-bglight transition-all"
+                  >
+                    CANCELAR
+                  </button>
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => void handleCompleteSubmit()}
+                    className="flex-1 py-3 rounded-full bg-alerta text-white font-sans font-bold text-xs uppercase tracking-wider hover:opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-1.5"
+                  >
+                    {actionLoading && <span className="material-symbols-outlined text-sm animate-spin">refresh</span>}
+                    FINALIZAR MISIÓN
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Finish Result Screen */
+              <div className="flex flex-col gap-4 font-mono text-xs">
+                <div className="flex items-center gap-2 text-tealbrand">
+                  <span className="material-symbols-outlined text-2xl">task_alt</span>
+                  <h4 className="font-bold text-sm uppercase">PROCESO DE CIERRE INICIADO</h4>
+                </div>
+                <div className="bg-bglight p-4 rounded-2xl border border-cardborder flex flex-col gap-2">
+                  <div className="flex justify-between">
+                    <span className="text-textsecondary">ESTADO CIERRE:</span>
+                    <span className="font-bold text-textprimary uppercase">{finishResult.status}</span>
+                  </div>
+                  {finishResult.txHash && (
+                    <div className="flex justify-between">
+                      <span className="text-textsecondary">TX CIERRE:</span>
+                      <span className="font-bold text-primaryviolet text-[10px] break-all">{finishResult.txHash}</span>
+                    </div>
+                  )}
+                </div>
+                <p className="font-sans text-xs text-textsecondary">
+                  {finishResult.status === 'completed'
+                    ? 'El proceso ha finalizado y el saldo sobrante fue liberado.'
+                    : 'La devolución (defund) está siendo procesada en segundo plano por el proveedor Citrus y Soroban.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowCompleteConfirm(false)}
+                  className="w-full py-3 rounded-full bg-primaryviolet text-white font-bold text-xs uppercase tracking-wider hover:bg-primaryviolet-hover transition-all"
+                >
+                  CERRAR VENTANA
+                </button>
+              </div>
+            )}
+
+            {error && (
+              <div className="p-3 rounded-xl bg-alerta/10 border border-alerta/20 font-mono text-xs text-alerta">
+                {error}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -119,7 +190,7 @@ export default function ActiveMissionPage() {
               onClick={handleReset}
               className="font-mono text-[10px] font-bold text-textsecondary/50 hover:text-alerta transition-colors uppercase tracking-wider"
             >
-              REINICIAR DEMO
+              {isDemoMode ? 'REINICIAR DEMO' : 'CERRAR SESIÓN'}
             </button>
           </div>
         </div>
@@ -130,19 +201,19 @@ export default function ActiveMissionPage() {
         {/* Status bar */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-8 p-4 sm:p-5 rounded-2xl bg-white border border-cardborder shadow-sm">
           <div className="flex items-center gap-3">
-            <span className={`w-2.5 h-2.5 rounded-full ${isCompleted ? 'bg-textsecondary/40' : isPaused ? 'bg-stellar animate-pulse' : 'bg-online animate-pulse'}`} />
+            <span className={`w-2.5 h-2.5 rounded-full ${isCompleted ? 'bg-textsecondary/40' : isClosing ? 'bg-amber-500 animate-pulse' : isPaused ? 'bg-stellar animate-pulse' : 'bg-online animate-pulse'}`} />
             <div>
               <span className={`font-mono text-xs font-bold tracking-wider uppercase ${statusColor}`}>
                 ESTADO eSIM: <strong>{statusLabel}</strong>
               </span>
               <p className="font-mono text-[10px] text-textsecondary mt-0.5">
-                {mission.destination.flag} {mission.destination.name} · {mission.destination.coverage} · {mission.channelId}
+                {mission.destination.flag} {mission.destination.name} · {mission.destination.coverage} · {mission.channelId || 'CANAL EN PROCESO'}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-4 font-mono text-xs text-textsecondary">
             <span>{fmtDate(mission.startDate)} → {fmtDate(mission.endDate)}</span>
-            <span className="hidden sm:inline">RED STELLAR TESTNET</span>
+            <span className="hidden sm:inline">RED STELLAR {caps?.network ? caps.network.toUpperCase() : 'TESTNET'}</span>
           </div>
         </div>
 
@@ -162,7 +233,7 @@ export default function ActiveMissionPage() {
             iconColor="text-tealbrand"
           />
           <MetricCard
-            label="DATOS"
+            label="DATOS EST."
             value={fmtMb(mission.consumedMb)}
             icon="wifi_tethering"
             iconColor="text-primaryviolet"
@@ -223,11 +294,13 @@ export default function ActiveMissionPage() {
                 <p className="text-xs text-textprimary italic leading-relaxed">
                   {isCompleted
                     ? '"Misión completada. El saldo no consumido ha sido liberado a tu wallet. Hasta la próxima partida."'
-                    : isPaused
-                      ? '"Los datos están pausados. Recargá saldo o reanudá cuando estés listo para continuar."'
-                      : pctRemaining < 20
-                        ? `"¡Atención! Queda menos del 20% de tu presupuesto. Considerá recargar saldo antes de quedarte sin datos."`
-                        : `"Tu misión está dentro del presupuesto. Disponés de aproximadamente ${fmtMb(mission.consumedMb)} de datos en ${mission.destination.name}. Navegando en modo óptimo."`
+                    : isClosing
+                      ? '"Proceso de cierre en curso. Liquidando consumo final con Citrus y Soroban."'
+                      : isPaused
+                        ? '"Los datos están pausados. Recargá saldo o reanudá cuando estés listo para continuar."'
+                        : pctRemaining < 20
+                          ? `"¡Atención! Queda menos del 20% de tu presupuesto. Considerá recargar saldo antes de quedarte sin datos."`
+                          : `"Tu misión está dentro del presupuesto. Disponés de aproximadamente ${fmtMb(mission.consumedMb)} de datos en ${mission.destination.name}. Navegando en modo óptimo."`
                   }
                 </p>
               </div>
@@ -238,22 +311,23 @@ export default function ActiveMissionPage() {
           <div className="lg:col-span-8 flex flex-col gap-6">
 
             {/* Action buttons */}
-            {!isCompleted && (
+            {!isCompleted && !isClosing && (
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
-                  disabled={isPaused}
+                  disabled={isPaused || actionLoading}
                   onClick={handleSimulate}
                   className="flex-1 min-w-[160px] py-3.5 rounded-full bg-primaryviolet text-white font-sans font-semibold text-sm uppercase tracking-wider shadow-[0_4px_14px_rgba(105,65,255,0.3)] hover:bg-primaryviolet-hover hover:shadow-[0_6px_20px_rgba(105,65,255,0.4)] disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2"
                 >
                   <span className="material-symbols-outlined text-base">bolt</span>
-                  INYECTAR TRÁFICO DE PRUEBA
+                  INYECTAR TRÁFICO
                 </button>
 
                 <button
                   type="button"
+                  disabled={actionLoading}
                   onClick={() => setShowTopUp(true)}
-                  className="flex-1 min-w-[160px] py-3.5 rounded-full border border-cardborder bg-white text-textprimary font-sans font-semibold text-sm uppercase tracking-wider hover:bg-bglight hover:border-tealbrand/40 hover:text-tealbrand shadow-sm transition-all duration-200 flex items-center justify-center gap-2"
+                  className="flex-1 min-w-[160px] py-3.5 rounded-full border border-cardborder bg-white text-textprimary font-sans font-semibold text-sm uppercase tracking-wider hover:bg-bglight hover:border-tealbrand/40 hover:text-tealbrand shadow-sm disabled:opacity-40 transition-all duration-200 flex items-center justify-center gap-2"
                 >
                   <span className="material-symbols-outlined text-base">add_circle</span>
                   RECARGAR SALDO
@@ -261,19 +335,25 @@ export default function ActiveMissionPage() {
 
                 <button
                   type="button"
-                  onClick={togglePause}
+                  disabled={actionLoading}
+                  onClick={() => void togglePause()}
                   className={`flex-1 min-w-[160px] py-3.5 rounded-full border font-sans font-semibold text-sm uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 ${
                     isPaused
                       ? 'border-online/40 bg-online/10 text-online hover:bg-online/20'
                       : 'border-stellar/40 bg-stellar/10 text-textprimary hover:bg-stellar/20'
                   }`}
                 >
-                  <span className="material-symbols-outlined text-base">{isPaused ? 'play_circle' : 'pause_circle'}</span>
+                  {actionLoading ? (
+                    <span className="material-symbols-outlined text-base animate-spin">refresh</span>
+                  ) : (
+                    <span className="material-symbols-outlined text-base">{isPaused ? 'play_circle' : 'pause_circle'}</span>
+                  )}
                   {isPaused ? 'REANUDAR' : 'PAUSAR DATOS'}
                 </button>
 
                 <button
                   type="button"
+                  disabled={actionLoading}
                   onClick={() => setShowCompleteConfirm(true)}
                   className="flex-1 min-w-[160px] py-3.5 rounded-full border border-alerta/30 bg-alerta/5 text-alerta font-sans font-semibold text-sm uppercase tracking-wider hover:bg-alerta/10 transition-all duration-200 flex items-center justify-center gap-2"
                 >
@@ -298,7 +378,7 @@ export default function ActiveMissionPage() {
                   onClick={handleReset}
                   className="flex-1 py-3.5 rounded-full border border-cardborder bg-white text-textsecondary font-sans font-semibold text-sm uppercase tracking-wider hover:bg-bglight transition-all duration-200"
                 >
-                  REINICIAR DEMO
+                  {isDemoMode ? 'REINICIAR DEMO' : 'CERRAR SESIÓN'}
                 </button>
               </div>
             )}
@@ -346,7 +426,9 @@ export default function ActiveMissionPage() {
                     {events.length} OPS
                   </span>
                 </div>
-                <span className="font-mono text-[10px] text-textsecondary">Stellar Testnet</span>
+                <span className="font-mono text-[10px] text-textsecondary">
+                  Stellar {caps?.network ? caps.network.toUpperCase() : 'Testnet'}
+                </span>
               </div>
               <ActivityFeed events={events} />
             </div>
@@ -357,12 +439,12 @@ export default function ActiveMissionPage() {
                 PANEL TÉCNICO
               </span>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 font-mono text-[10px]">
-                <TechRow label="CANAL" value={mission.channelId} />
-                <TechRow label="RED" value="Stellar Testnet" />
+                <TechRow label="CANAL" value={mission.channelId || 'EN PROCESO'} />
+                <TechRow label="RED" value={caps?.network || 'Stellar Testnet'} />
                 <TechRow label="PROTOCOLO" value="MPP / Soroban" />
                 <TechRow label="eSIM" value={mission.esimStatus.toUpperCase()} />
                 <TechRow label="PROVEEDOR" value={providerLabel} />
-                <TechRow label="MODO" value={mission.isMock !== false ? 'Simulado' : 'Live'} />
+                <TechRow label="MODO" value={isDemoMode ? 'Demo Frontend' : mission.isMock !== false ? 'Mock API' : 'Live API'} />
               </div>
             </div>
 

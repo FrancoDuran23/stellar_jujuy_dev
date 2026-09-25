@@ -2,7 +2,16 @@
 
 export type Network = 'stellar:testnet' | 'stellar:pubnet'
 
-export type MissionStatus = 'active' | 'paused' | 'completed' | 'error'
+export type MissionStatus =
+  | 'pending_payment'
+  | 'paid'
+  | 'active'
+  | 'paused'
+  | 'closing'
+  | 'refund_pending'
+  | 'completed'
+  | 'failed'
+  | 'error'
 
 export type Destination = {
   id: string
@@ -34,16 +43,19 @@ export type Mission = {
   alertAt20pct: boolean
   autoPauseAtLimit: boolean
   status: MissionStatus
+  paymentStatus?: 'pending' | 'paid' | 'failed'
+  depositTxHash?: string
   // live state
   balanceUsdc: number      // remaining
   consumedUsdc: number
   consumedMb: number
-  esimStatus: 'active' | 'paused' | 'disabled'
+  esimStatus: 'active' | 'paused' | 'disabled' | 'not_provisioned'
   network: Network
-  channelId: string        // mock Soroban channel id
+  channelId: string        // Soroban channel id
   iccid?: string
   esim?: PublicEsimInfo
   isMock?: boolean
+  closeTxHash?: string
   createdAt: string        // ISO timestamp
 }
 
@@ -68,6 +80,52 @@ export type PaymentEvent = {
 export type MissionState = {
   mission: Mission | null
   events: UsageEvent[]
+}
+
+export type PaymentIntentInfo = {
+  intentId: string
+  amount: string
+  asset: string
+  sep7Uri?: string
+  qr?: string
+  destination?: string
+  status: string
+  isMock: boolean
+}
+
+export type PaymentConfirmationResult = {
+  valid: boolean
+  status: string
+  depositTxHash?: string
+}
+
+export type FinishResult = {
+  txHash?: string
+  status: 'closing' | 'refund_pending' | 'settling' | 'completed' | 'failed'
+  refundAmountUsdc?: number
+}
+
+export type BackendCapabilities = {
+  backendAvailable: boolean
+  network: string
+  stage: number
+  channelConfigured: boolean
+  voucherAgentAvailable: boolean
+  paymentServerReady: boolean
+  voucherAgentReady: boolean
+  channelReady: boolean
+  citrusReady: boolean
+  connectivityProvider: 'fake' | 'citrus'
+  cosmoPayStatus: 'live' | 'mock' | 'unavailable'
+  cosmoPayMode: 'live' | 'mock' | 'unavailable'
+  citrusStatus: 'live' | 'unavailable'
+  meteringMode: 'real' | 'demo' | 'unavailable'
+  reconciliationAvailable: boolean
+  demoTrafficEnabled: boolean
+  mode: 'live' | 'partial' | 'demo'
+  liveEnabled: boolean
+  requiresAuth: boolean
+  missingConfiguration: string[]
 }
 
 // ── Wizard step state ────────────────────────────────────────────────────────
