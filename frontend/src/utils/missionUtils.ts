@@ -7,7 +7,7 @@ export const DESTINATIONS: Destination[] = [
     flag: '🇧🇷',
     network: 'Claro / TIM 5G',
     coverage: '5G / 4G LTE',
-    pricePerMbUsdc: 0.001,
+    pricePerMbUsdc: 0.0025,
   },
   {
     id: 'chile',
@@ -15,7 +15,7 @@ export const DESTINATIONS: Destination[] = [
     flag: '🇨🇱',
     network: 'Entel / Movistar 4G',
     coverage: '4G LTE',
-    pricePerMbUsdc: 0.0008,
+    pricePerMbUsdc: 0.0020,
   },
   {
     id: 'bolivia',
@@ -23,7 +23,7 @@ export const DESTINATIONS: Destination[] = [
     flag: '🇧🇴',
     network: 'Tigo / Entel 4G',
     coverage: '4G / 3G',
-    pricePerMbUsdc: 0.0006,
+    pricePerMbUsdc: 0.0015,
   },
 ]
 
@@ -33,8 +33,8 @@ export const PRICE_PER_MIB_RAW = 10_000_000n   // 1 USDC/MiB in raw units (demo)
 export const STELLAR_NETWORK = 'stellar:testnet'
 
 /** How many MB a given USDC budget buys at the destination's price */
-export function estimateMb(budgetUsdc: number, pricePerMbUsdc: number): number {
-  if (pricePerMbUsdc <= 0) return 0
+export function estimateMb(budgetUsdc: number, pricePerMbUsdc?: number): number {
+  if (!pricePerMbUsdc || pricePerMbUsdc <= 0) return 0
   return Math.floor(budgetUsdc / pricePerMbUsdc)
 }
 
@@ -46,10 +46,18 @@ export function fmtUsdc(amount: number, decimals = 4): string {
   })
 }
 
-/** Format MB for display */
+/** Format MB for display (1 GB = 1000 MB decimal) */
 export function fmtMb(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`
-  return `${mb.toFixed(1)} MB`
+  if (mb <= 0) return '0 MB'
+  if (mb >= 1000) return `${(mb / 1000).toFixed(1)} GB`
+  return `${mb.toFixed(0)} MB`
+}
+
+/** Format MiB/GiB binary units */
+export function fmtMib(mib: number): string {
+  if (mib <= 0) return '0 MiB'
+  if (mib >= 1024) return `${(mib / 1024).toFixed(2)} GiB`
+  return `${mib.toFixed(1)} MiB`
 }
 
 /** Short tx hash for display */

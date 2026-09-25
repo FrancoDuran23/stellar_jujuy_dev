@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import logoSrc from '../assets/logo.png'
+import SystemBadge from './SystemBadge'
 
 export default function Header() {
   return (
@@ -13,10 +14,7 @@ export default function Header() {
             alt="ASTROAM"
             className="h-8 sm:h-9 object-contain transition-transform duration-200 group-hover:scale-105"
           />
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primaryviolet-light border border-primaryviolet/20 text-[11px] font-mono font-semibold text-primaryviolet tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-primaryviolet animate-pulse" />
-            TESTNET LIVE
-          </span>
+          <SystemBadge />
         </a>
 
         {/* Nav links */}

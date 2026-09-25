@@ -55,14 +55,29 @@ export default function StepBudget({
       </div>
 
       {/* Estimated data */}
-      <div className="p-5 rounded-2xl bg-bglight border border-cardborder flex items-center gap-4">
-        <div className="w-12 h-12 rounded-full bg-tealbrand/10 border border-tealbrand/20 flex items-center justify-center shrink-0">
+      <div className="p-5 rounded-2xl bg-bglight border border-cardborder flex items-start sm:items-center gap-4">
+        <div className="w-12 h-12 rounded-full bg-tealbrand/10 border border-tealbrand/20 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
           <span className="material-symbols-outlined text-tealbrand text-xl">wifi_tethering</span>
         </div>
-        <div>
-          <p className="font-mono text-[10px] font-bold text-textsecondary uppercase tracking-wider">DATOS DISPONIBLES ESTIMADOS</p>
-          <p className="font-display text-2xl font-bold text-textprimary">{fmtMb(estimatedMb)}</p>
-          <p className="text-xs text-textsecondary">a {(destination.pricePerMbUsdc * 1000).toFixed(1)} mUSDC/MB en {destination.name}</p>
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="font-mono text-[10px] font-bold text-textsecondary uppercase tracking-wider">
+              DATOS DISPONIBLES ESTIMADOS
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold bg-tealbrand/10 text-tealbrand border border-tealbrand/20 uppercase">
+              ESTIMACIÓN
+            </span>
+          </div>
+          {destination.pricePerMbUsdc && destination.pricePerMbUsdc > 0 ? (
+            <>
+              <p className="font-display text-2xl font-bold text-textprimary">{fmtMb(estimatedMb)}</p>
+              <p className="text-xs text-textsecondary mt-0.5">
+                a {(destination.pricePerMbUsdc * 1000).toFixed(1)} mUSDC/MB en {destination.name}. <span className="text-[11px] text-textsecondary/80">El uso y consumo real son confirmados en tiempo real por Citrus Mobile.</span>
+              </p>
+            </>
+          ) : (
+            <p className="font-mono text-xs font-bold text-alerta mt-1">Tarifa no disponible</p>
+          )}
         </div>
       </div>
 

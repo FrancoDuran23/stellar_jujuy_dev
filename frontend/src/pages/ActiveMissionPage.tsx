@@ -287,16 +287,16 @@ export default function ActiveMissionPage() {
             onClick={() => void togglePause()}
             className={`py-3.5 px-4 rounded-2xl border font-sans font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 min-h-[48px] ${
               isPaused
-                ? 'border-online/40 bg-online/10 text-online hover:bg-online/20'
-                : 'border-stellar/40 bg-stellar/10 text-textprimary hover:bg-stellar/20'
-            }`}
+                ? 'border-2 border-online bg-online/15 text-online hover:bg-online/25 active:scale-[0.98]'
+                : 'border-2 border-amber-500/80 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 hover:border-amber-600 active:scale-[0.98]'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
           >
             {actionLoading ? (
               <span className="material-symbols-outlined text-base animate-spin">refresh</span>
             ) : (
-              <span className="material-symbols-outlined text-base">{isPaused ? 'play_circle' : 'pause_circle'}</span>
+              <span className="material-symbols-outlined text-base font-bold">{isPaused ? 'play_circle' : 'pause_circle'}</span>
             )}
-            {isPaused ? 'REANUDAR' : 'PAUSAR'}
+            {isPaused ? 'REANUDAR' : 'PAUSAR DATOS'}
           </button>
 
           <button

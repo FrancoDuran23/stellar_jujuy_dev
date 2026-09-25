@@ -10,6 +10,9 @@ export default function EsimSetupPage() {
   const [copiedIccid, setCopiedIccid] = useState(false)
   const [activeTab, setActiveTab] = useState<'iphone' | 'android'>('iphone')
 
+  const isIos = typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent)
+  const isAndroid = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent)
+
   if (!mission) {
     return (
       <div className="min-h-screen bg-bglight flex flex-col items-center justify-center p-6 text-center">
@@ -115,17 +118,37 @@ export default function EsimSetupPage() {
             )}
           </div>
 
-          {/* Direct install button */}
-          {esim.directInstallUrl && (
-            <a
-              href={esim.directInstallUrl}
-              target="_blank"
-              rel="noreferrer"
+          {/* Direct install / instructions button */}
+          {isDemo ? (
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById('instructions-card')
+                if (el) el.scrollIntoView({ behavior: 'smooth' })
+              }}
               className="w-full py-3.5 px-4 mb-3 rounded-2xl bg-primaryviolet text-white font-sans font-bold text-xs uppercase tracking-wider hover:bg-primaryviolet-hover transition-all flex items-center justify-center gap-2 shadow-[0_4px_14px_rgba(105,65,255,0.25)] min-h-[48px]"
             >
-              <span className="material-symbols-outlined text-base">phone_iphone</span>
-              INSTALAR EN ESTE IPHONE
-            </a>
+              <span className="material-symbols-outlined text-base">auto_fix_high</span>
+              VER INSTALACIÓN DEMO
+            </button>
+          ) : (
+            esim.directInstallUrl && (
+              <a
+                href={esim.directInstallUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full py-3.5 px-4 mb-3 rounded-2xl bg-primaryviolet text-white font-sans font-bold text-xs uppercase tracking-wider hover:bg-primaryviolet-hover transition-all flex items-center justify-center gap-2 shadow-[0_4px_14px_rgba(105,65,255,0.25)] min-h-[48px]"
+              >
+                <span className="material-symbols-outlined text-base">
+                  {isIos ? 'phone_iphone' : isAndroid ? 'phone_android' : 'qr_code'}
+                </span>
+                {isIos
+                  ? 'INSTALAR EN ESTE IPHONE'
+                  : isAndroid
+                    ? 'VER INSTRUCCIONES PARA ANDROID'
+                    : 'VER OPCIONES DE INSTALACIÓN'}
+              </a>
+            )
           )}
 
           <p className="font-sans text-xs text-textsecondary">
@@ -183,7 +206,7 @@ export default function EsimSetupPage() {
           </div>
 
           {/* Instruction Steps */}
-          <div className="bg-white rounded-3xl border border-cardborder p-6 shadow-sm flex-1">
+          <div id="instructions-card" className="bg-white rounded-3xl border border-cardborder p-6 shadow-sm flex-1">
             <div className="flex items-center justify-between mb-4 border-b border-cardborder pb-3">
               <h3 className="font-mono text-xs font-bold text-textsecondary uppercase tracking-wider">
                 INSTRUCCIONES PASO A PASO
@@ -266,7 +289,7 @@ export default function EsimSetupPage() {
               Perfil provisto por Citrus Mobile
             </p>
             <p className="font-sans text-xs text-textsecondary">
-              Tu wallet Soroban mantendrá la eSIM financiada en tiempo real.
+              La wallet de conectividad se administra en Citrus Mobile y está respaldada por el saldo disponible en el canal de pagos Soroban.
             </p>
           </div>
         </div>

@@ -44,12 +44,12 @@ export default function ProblemSection() {
           </p>
         </div>
 
-        {/* 3 obstacle cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
+        {/* 3 obstacle cards - mobile carousel, desktop grid */}
+        <div className="flex md:grid md:grid-cols-3 gap-5 overflow-x-auto snap-x snap-mandatory pb-4 md:pb-0 -mx-6 px-6 md:mx-0 md:px-0 scrollbar-none relative z-10">
           {obstacles.map((o) => (
             <div
               key={o.number}
-              className="flex flex-col justify-between p-8 rounded-2xl bg-bglight border border-cardborder hover:border-primaryviolet/50 hover:shadow-md transition-all group"
+              className="w-[82%] sm:w-[320px] md:w-auto shrink-0 snap-center flex flex-col justify-between p-6 sm:p-8 rounded-2xl bg-bglight border border-cardborder hover:border-primaryviolet/50 hover:shadow-md transition-all group"
             >
               <div className="flex flex-col gap-4">
                 <div className="w-14 h-14 rounded-2xl bg-white border border-cardborder flex items-center justify-center text-primaryviolet shadow-sm">
@@ -69,6 +69,14 @@ export default function ProblemSection() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Mobile carousel scroll indicator hint */}
+        <div className="flex md:hidden justify-center items-center gap-1.5 -mt-6">
+          <span className="w-2 h-2 rounded-full bg-primaryviolet" />
+          <span className="w-1.5 h-1.5 rounded-full bg-cardborder" />
+          <span className="w-1.5 h-1.5 rounded-full bg-cardborder" />
+          <span className="font-mono text-[10px] text-textsecondary/60 ml-2">DESLIZÁ PARA VER MÁS &rarr;</span>
         </div>
       </div>
     </section>

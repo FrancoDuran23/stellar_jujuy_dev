@@ -16,11 +16,11 @@ export default function HowItWorksSection() {
           </p>
         </div>
 
-        {/* 4 station cards */}
-        <div className="relative grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* 4 station cards - mobile carousel, desktop grid */}
+        <div className="relative flex lg:grid lg:grid-cols-4 gap-5 overflow-x-auto snap-x snap-mandatory pb-4 lg:pb-0 -mx-6 px-6 lg:mx-0 lg:px-0 scrollbar-none">
 
           {/* Station 1 */}
-          <div className="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-primaryviolet/40 hover:shadow-md transition-all group">
+          <div className="w-[82%] sm:w-[280px] lg:w-auto shrink-0 snap-center flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-primaryviolet/40 hover:shadow-md transition-all group">
             <div className="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
               <svg className="w-28 h-28" fill="none" viewBox="0 0 120 120">
                 <circle cx="60" cy="60" opacity="0.4" r="45" stroke="#6941FF" strokeDasharray="3 3" strokeWidth="1.2" />
@@ -45,7 +45,7 @@ export default function HowItWorksSection() {
           </div>
 
           {/* Station 2 */}
-          <div className="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-tealbrand/40 hover:shadow-md transition-all group">
+          <div className="w-[82%] sm:w-[280px] lg:w-auto shrink-0 snap-center flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-tealbrand/40 hover:shadow-md transition-all group">
             <div className="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
               <svg className="w-28 h-28" fill="none" viewBox="0 0 120 120">
                 <rect fill="#FFFFFF" height="66" rx="16" stroke="#008C99" strokeWidth="1.8" width="34" x="43" y="27" />
@@ -69,7 +69,7 @@ export default function HowItWorksSection() {
           </div>
 
           {/* Station 3 */}
-          <div className="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-online/40 hover:shadow-md transition-all group">
+          <div className="w-[82%] sm:w-[280px] lg:w-auto shrink-0 snap-center flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-online/40 hover:shadow-md transition-all group">
             <div className="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
               <svg className="w-28 h-28" fill="none" viewBox="0 0 120 120">
                 <rect fill="#FFFFFF" height="22" rx="3" stroke="#6941FF" strokeWidth="1.5" width="16" x="52" y="38" />
@@ -94,7 +94,7 @@ export default function HowItWorksSection() {
           </div>
 
           {/* Station 4 */}
-          <div className="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-primaryviolet/40 hover:shadow-md transition-all group">
+          <div className="w-[82%] sm:w-[280px] lg:w-auto shrink-0 snap-center flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-primaryviolet/40 hover:shadow-md transition-all group">
             <div className="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
               <svg className="w-28 h-28" fill="none" viewBox="0 0 120 120">
                 <ellipse cx="60" cy="60" rx="42" ry="18" stroke="#6941FF" strokeWidth="1.2" transform="rotate(-15 60 60)" />

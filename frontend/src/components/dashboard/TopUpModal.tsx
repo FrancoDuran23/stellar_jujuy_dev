@@ -41,17 +41,17 @@ export default function TopUpModal({ onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-4">
+      {/* Backdrop overlay */}
       <div
-        className="absolute inset-0 bg-textprimary/30 backdrop-blur-sm"
-        onClick={onClose}
+        className="absolute inset-0 bg-textprimary/40 backdrop-blur-sm transition-opacity"
+        onClick={() => !actionLoading && onClose()}
       />
 
-      {/* Modal / Bottom-sheet card */}
-      <div className="relative z-10 w-full max-w-md max-h-[85vh] sm:max-h-[90vh] overflow-y-auto bg-white rounded-t-3xl sm:rounded-3xl border border-cardborder shadow-[0_-10px_40px_rgba(25,24,29,0.15)] sm:shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 sm:p-7 flex flex-col gap-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        {/* Mobile drag handle */}
-        <div className="w-12 h-1.5 bg-cardborder rounded-full mx-auto -mt-2 mb-1 sm:hidden" />
+      {/* Real mobile bottom-sheet / Desktop centered modal card */}
+      <div className="relative z-10 w-full max-w-md max-h-[92dvh] md:max-h-[90vh] overflow-y-auto bg-white rounded-t-3xl rounded-b-none md:rounded-3xl border-t md:border border-cardborder shadow-[0_-12px_40px_rgba(15,23,42,0.2)] md:shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 md:p-7 flex flex-col gap-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        {/* Mobile drag handle indicator */}
+        <div className="w-12 h-1.5 bg-cardborder rounded-full mx-auto -mt-2 mb-1 md:hidden shrink-0" />
 
         <div className="flex items-center justify-between">
           <div>
