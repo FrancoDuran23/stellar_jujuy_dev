@@ -9,7 +9,11 @@ import "dotenv/config";
 import { createServerBoot, createServerChannelBoot } from "../config/boot.ts";
 import { parseServerEnv } from "../config/env.ts";
 import { createEventEmitter, createWebhookSink } from "../shared/events.ts";
+import { createConnectivityProvider } from "../providers/connectivity/createConnectivityProvider.ts";
+import { CitrusWebhookHandler } from "../services/CitrusWebhookHandler.ts";
+import { webhookEventPath, WebhookEventLog } from "../persistence/webhook-event.ts";
 import { createServerApp } from "./app.ts";
+import type { CitrusWebhooksRouteOptions } from "./routes/citrus-webhooks.ts";
 
 const DEFAULT_PORT = 8080;
 const DEFAULT_NETWORK = "stellar:testnet";
@@ -46,6 +50,50 @@ const boot = createServerBoot();
 const channel = parsedAtStartup.ok ? parsedAtStartup.value.CHANNEL_CONTRACT : undefined;
 const channelBoot = channel !== undefined ? createServerChannelBoot() : undefined;
 
+// Citrus webhooks (docs/citrus-mobile-spec.md v2 §7 R10) — the ONLY Citrus
+// surface wired in this work unit (D5: the usage-loop and FundingService are
+// NOT in the server lifecycle yet). Mounted when CONNECTIVITY_PROVIDER=citrus
+// and CITRUS_WEBHOOK_SECRET are set; the esim-record store is the shared one
+// opened by the provider factory. A missing/invalid backend (e.g. no
+// CITRUS_API_KEY to build the provider, FC-R1) degrades to "no webhooks"
+// with a loud warning instead of preventing the process from starting.
+const envAtStartup = parsedAtStartup.ok ? parsedAtStartup.value : undefined;
+let citrusWebhooks: CitrusWebhooksRouteOptions | undefined;
+if (
+  envAtStartup !== undefined &&
+  envAtStartup.CONNECTIVITY_PROVIDER === "citrus" &&
+  envAtStartup.CITRUS_WEBHOOK_SECRET !== undefined &&
+  envAtStartup.PRICE_PER_MB_RAW !== undefined
+) {
+  try {
+    const pricePerMbRaw: bigint = envAtStartup.PRICE_PER_MB_RAW;
+    const { esimStore } = createConnectivityProvider({
+      ...envAtStartup,
+      PRICE_PER_MB_RAW: pricePerMbRaw,
+    });
+    const log = WebhookEventLog.open(
+      webhookEventPath(envAtStartup.DATA_DIR, envAtStartup.STELLAR_NETWORK),
+    );
+    const handler = new CitrusWebhookHandler({
+      log,
+      esimStore,
+      logger: (line) => process.stdout.write(`${JSON.stringify(line)}\n`),
+    });
+    citrusWebhooks = { handler, secret: envAtStartup.CITRUS_WEBHOOK_SECRET };
+    process.stdout.write(
+      `${JSON.stringify({ level: "info", msg: "citrus webhooks mounted on /citrus/webhooks" })}\n`,
+    );
+  } catch (error) {
+    process.stderr.write(
+      `${JSON.stringify({
+        level: "error",
+        msg: "citrus webhook config incomplete — /citrus/webhooks NOT mounted",
+        detail: error instanceof Error ? error.message : String(error),
+      })}\n`,
+    );
+  }
+}
+
 const app = createServerApp({
   boot,
   network,
@@ -53,6 +101,7 @@ const app = createServerApp({
   pricePerMibRaw,
   emit: emitEvent,
   ...(channelBoot !== undefined ? { channelBoot, channel } : {}),
+  ...(citrusWebhooks !== undefined ? { citrusWebhooks } : {}),
 });
 
 app.listen(port, () => {

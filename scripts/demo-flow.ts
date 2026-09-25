@@ -2,10 +2,10 @@
  * Script de Flujo Completo End-to-End (Demo Hackathon)
  * 
  * Simula el viaje completo de un argentino en Brasil:
- * 1. Aprovisionamiento de la eSIM (Telnyx) y apertura de canal en Soroban (Stellar).
+ * 1. Aprovisionamiento de la eSIM (Citrus, backend `fake` en esta demo) y apertura de canal en Soroban (Stellar).
  * 2. Navegación y consumo progresivo de bytes a través del medidor.
  * 3. Firma y verificación de vales acumulativos (MPP).
- * 4. Ajuste automático de límites en Telnyx y corte si se agota el saldo.
+ * 4. Corte de datos si se agota el saldo del canal (política suspend/noop, R8).
  * 
  * Para ejecutar:
  *   npm run demo:flow
@@ -18,7 +18,7 @@
  *   `npm run agent:serve` corriendo): pide los vales al agente REAL por HTTP.
  *   Requiere además `GATEWAY_TOKEN`, `CHANNEL_CONTRACT` y `PRICE_PER_MIB_RAW`
  *   (los mismos valores que lee el agente) y opcionalmente `STELLAR_NETWORK`.
- *   Telnyx y el depósito del canal siguen simulados.
+ *   Citrus y el depósito del canal siguen simulados.
  */
 
 import "dotenv/config";
@@ -28,7 +28,7 @@ import {
   type VoucherRequestResult,
 } from "../src/meter/meter-service.ts";
 import { createAgentVoucherPort, createInMemoryVoucherPort, type VoucherPort } from "../src/meter/voucher-port.ts";
-import type { ConnectivityProvider } from "../src/providers/connectivity/ConnectivityProvider.ts";
+import { FakeProvider } from "../src/providers/connectivity/FakeProvider.ts";
 import { createConnectivitySession, type ConnectivitySession } from "../src/models/ConnectivitySession.ts";
 import type { ChannelStatePort } from "../src/server/channel-service.ts";
 import { arePricesAligned, parseNonNegativeIntegerRaw, pricePerMibFromPerMbRaw } from "../src/shared/money.ts";
@@ -37,9 +37,10 @@ import { isNetwork, type Network } from "../src/shared/stellar/network.ts";
 
 /** Contrato de canal ficticio con formato válido (C + 55 base32) para el modo offline. */
 const DEMO_CHANNEL_ID = "CDEMOCANALSOROBANJUJUYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-/** Tarifa de la demo: 1 USDC por MB decimal (1 raw = 1e-7 USDC). */
-const DEMO_PRICE_PER_MB_RAW = 10_000_000n;
-/** La misma tarifa expresada por MiB (el agente cotiza por MiB): 10_485_760 raw. */
+/** Tarifa de la demo: 0,0025 USDC por MB decimal (1 raw = 1e-7 USDC), o sea
+ * USD 2,48/GB = tarifa pública de Citrus Mobile en Brasil (USD 1,84/GB) × 1,35. */
+const DEMO_PRICE_PER_MB_RAW = 25_000n;
+/** La misma tarifa expresada por MiB (el agente cotiza por MiB): 26_215 raw. */
 const DEMO_PRICE_PER_MIB_RAW = pricePerMibFromPerMbRaw(DEMO_PRICE_PER_MB_RAW);
 
 type VoucherSetup = {
@@ -79,7 +80,7 @@ function resolveVoucherSetup(env: NodeJS.ProcessEnv, depositRaw: bigint): Vouche
   if (channelId === undefined || !isStellarContractId(channelId)) problems.push("CHANNEL_CONTRACT falta o no es un contrato C... de 56 chars");
   if (pricePerMibRaw === undefined || pricePerMibRaw === 0n) problems.push("PRICE_PER_MIB_RAW falta o no es un entero positivo");
   else if (!arePricesAligned(DEMO_PRICE_PER_MB_RAW, pricePerMibRaw)) {
-    problems.push(`PRICE_PER_MIB_RAW=${pricePerMibRaw} no coincide con la tarifa de la demo (1 USDC/MB); usá ${DEMO_PRICE_PER_MIB_RAW}`);
+    problems.push(`PRICE_PER_MIB_RAW=${pricePerMibRaw} no coincide con la tarifa de la demo (0,0025 USDC/MB); usá ${DEMO_PRICE_PER_MIB_RAW}`);
   }
   if (!isNetwork(network)) problems.push(`STELLAR_NETWORK inválida: "${network}"`);
   if (problems.length > 0 || gatewayToken === undefined || channelId === undefined || pricePerMibRaw === undefined || !isNetwork(network)) {
@@ -111,32 +112,11 @@ async function runDemoFlow() {
   console.log("✈️  SIMULACIÓN: VIAJERO ARGENTINO ATERRIZA EN BRASIL");
   console.log("===============================================================\n");
 
-  // 1. Simular la respuesta de Telnyx (Proveedor de Conectividad)
-  const mockTelnyxProvider: ConnectivityProvider = {
-    async purchaseEsim(userId: string) {
-      console.log(`📡 [TELNYX API] Aprovisionando eSIM para usuario ${userId}...`);
-      return {
-        simCardId: "sim_br_99812",
-        iccid: "8955101234567890123F",
-        activationCode: "LPA:1$qr.telnyx.com$sim_br_99812",
-      };
-    },
-    async enable(simCardId: string) {
-      console.log(`🟢 [TELNYX API] SIM ${simCardId} HABILITADA en antenas Vivo/TIM.`);
-    },
-    async disable(simCardId: string) {
-      console.log(`🔴 [TELNYX API] SIM ${simCardId} DESHABILITADA (Corte de Datos por Límite de Saldo).`);
-    },
-    async setDataLimit(simCardId: string, limitMb: number) {
-      console.log(`📉 [TELNYX API] Nuevo data_limit asignado a SIM ${simCardId}: ${limitMb} MB.`);
-    },
-    async getUsage(_simCardId: string) {
-      return { mb: 120, status: "enabled" };
-    },
-  };
+  // 1. Simular la respuesta de Citrus (Proveedor de Conectividad)
+  const provider = new FakeProvider();
 
   // 2. Simular el estado del Canal de Soroban en la red de Stellar
-  const initialChannelDepositRaw = 50_000_000n; // 5 USDC en raw units (5 MB a 1 USDC/MB)
+  const initialChannelDepositRaw = 50_000_000n; // 5 USDC en raw units (2.000 MB a 0,0025 USDC/MB)
   const mockChannelStatePort: ChannelStatePort = {
     async getChannelInfo(_channel: string) {
       return {
@@ -152,8 +132,7 @@ async function runDemoFlow() {
   };
 
   // 3. Crear sesión del viajero
-  const esim = await mockTelnyxProvider.purchaseEsim("user_argentino_123");
-  await mockTelnyxProvider.enable(esim.simCardId);
+  const esim = await provider.provisionEsim("user_argentino_123");
 
   // Vales: doble offline por defecto, agente real si hay AGENT_VOUCHERS_URL
   const vouchers = resolveVoucherSetup(process.env, initialChannelDepositRaw);
@@ -167,7 +146,6 @@ async function runDemoFlow() {
     id: "sess_brasil_2026",
     userId: "user_argentino_123",
     channelId: vouchers.channelId,
-    simCardId: esim.simCardId,
     iccid: esim.iccid,
   });
 
@@ -175,9 +153,9 @@ async function runDemoFlow() {
 
   const meterService = new IntegratedMeterService({
     session,
-    provider: mockTelnyxProvider,
+    provider,
     balancePort: balanceAdapter,
-    pricePerMbRaw: DEMO_PRICE_PER_MB_RAW, // 1 USDC por MB (10,000,000 raw units)
+    pricePerMbRaw: DEMO_PRICE_PER_MB_RAW, // 0,0025 USDC por MB (25,000 raw units)
     voucherPort: vouchers.voucherPort,
     network: vouchers.network,
     voucherPricePerMibRaw: vouchers.pricePerMibRaw,
@@ -188,29 +166,33 @@ async function runDemoFlow() {
     logger: (line) => console.log(`   ${line}`),
   });
 
-  console.log("\n📲 [ESTADO INICIAL] Perfil eSIM activo | Saldo depositado en Canal Stellar: 5.00 USDC");
+  console.log("\n📲 [ESTADO INICIAL] Perfil eSIM activo | Saldo depositado en Canal Stellar: 5.00 USDC (~2.000 MB a 0,0025 USDC/MB)");
   console.log("----------------------------------------------------------------------------------");
 
-  // 4. Tramo 1: Navegación normal (2 MB)
-  console.log("\n🚗 [TRAMO 1] El viajero usa GPS y WhatsApp en Florianópolis (+2 MB)...");
-  await meterService.processTraffic(2_000_000);
+  // 4. Tramo 1: mapas y mensajería (300 MB → 0,75 USDC, sin cambios)
+  console.log("\n🚗 [TRAMO 1] El viajero usa GPS y WhatsApp en Florianópolis (+300 MB)...");
+  await meterService.processTraffic(300_000_000);
 
-  // 5. Tramo 2: Ver fotos/videos (+2 MB, consumo acumulado = 4 MB)
-  console.log("\n📸 [TRAMO 2] El viajero sube fotos en la playa (+2 MB)...");
-  await meterService.processTraffic(2_000_000);
+  // 5. Tramo 2: fotos (acumulado 1.000 MB → 2,50 USDC, queda 50%)
+  console.log("\n📸 [TRAMO 2] El viajero sube fotos de la playa (+700 MB, acumulado = 1.000 MB)...");
+  await meterService.processTraffic(700_000_000);
 
-  // 6. Tramo 3: Se intenta consumir 2 MB más (Excede el saldo de 5 MB)
-  console.log("\n⚠️ [TRAMO 3] Intentando reproducir video (+2 MB, acumulado = 6 MB, supera depósito de 5 USDC)...");
-  const result = await meterService.processTraffic(2_000_000);
+  // 6. Tramo 3: videollamada (acumulado 1.800 MB → 4,50 USDC, queda 10%: se baja el tope)
+  console.log("\n📹 [TRAMO 3] Videollamada con la familia (+800 MB, acumulado = 1.800 MB)...");
+  await meterService.processTraffic(800_000_000);
+
+  // 7. Tramo 4: streaming (acumulado 2.400 MB → 6,00 USDC, supera el depósito)
+  console.log("\n⚠️ [TRAMO 4] Intentando ver una serie (+600 MB, acumulado = 2.400 MB, supera depósito de 5 USDC)...");
+  const result = await meterService.processTraffic(600_000_000);
 
   console.log("\n===============================================================");
   console.log("📌 RESULTADO FINAL DE LA DEMO");
   console.log("===============================================================");
-  console.log(`• Bytes Medidos por el Gateway:  ${result.meterStatus.cumulativeBytes.toLocaleString()} bytes (~6.0 MB)`);
+  console.log(`• Bytes Medidos por el Gateway:  ${result.meterStatus.cumulativeBytes.toLocaleString()} bytes (~${(result.meterStatus.cumulativeBytes / 1_000_000).toLocaleString()} MB)`);
   console.log(`• Depósito del Canal de Soroban: ${initialChannelDepositRaw.toString()} raw units (5.0 USDC)`);
   console.log(`• Último vale (POST /vouchers):  ${describeVoucher(result.voucher)}`);
   console.log(`• Cuota pagada en el medidor:   ${result.meterStatus.paidQuotaMb}`);
-  console.log(`• Estado de la SIM en Telnyx:   ${result.actionApplied.kind === "disable" ? "DESHABILITADA 🔴" : "ACTIVA 🟢"}`);
+  console.log(`• Estado de la SIM:            ${result.actionApplied.kind === "suspend" ? "SUSPENDIDA 🔴" : "ACTIVA 🟢"}`);
   console.log("===============================================================\n");
 }
 

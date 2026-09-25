@@ -1,7 +1,7 @@
 import type { CosmoPayService } from '../../services/CosmoPayService.ts'
 import type { ConnectivityProvider } from '../../providers/connectivity/ConnectivityProvider.ts'
 import type { MissionRepository } from '../persistence/MissionRepository.ts'
-import type { Capabilities, DestinationInfo, ProductMission } from '../types/mission.ts'
+import type { Capabilities, DestinationInfo, ProductMission, PublicEsimInfo } from '../types/mission.ts'
 import { IntegratedMeterService } from '../../meter/meter-service.ts'
 import type { ChannelBalancePort } from '../../services/PolicyEnforcer.ts'
 import type { VoucherPort } from '../../meter/voucher-port.ts'
@@ -14,10 +14,13 @@ import { pricePerMibFromPerMbRaw } from '../../shared/money.ts'
 export type MissionProductServiceOptions = {
   repo: MissionRepository
   cosmoPay: CosmoPayService
-  telnyx: ConnectivityProvider
+  connectivity?: ConnectivityProvider
+  citrus?: ConnectivityProvider
+  telnyx?: ConnectivityProvider
   voucherPort?: VoucherPort
   balancePort?: ChannelBalancePort
   channelPort?: ChannelPort
+  hasCitrusReal?: boolean
   hasTelnyxReal?: boolean
   hasChannelReal?: boolean
   hasVoucherAgentReal?: boolean
@@ -27,11 +30,11 @@ export type MissionProductServiceOptions = {
 export class MissionProductService {
   private repo: MissionRepository
   private cosmoPay: CosmoPayService
-  private telnyx: ConnectivityProvider
+  private connectivity: ConnectivityProvider
   private voucherPort?: VoucherPort
   private balancePort?: ChannelBalancePort
   private channelPort?: ChannelPort
-  private hasTelnyxReal: boolean
+  private hasCitrusReal: boolean
   private hasChannelReal: boolean
   private hasVoucherAgentReal: boolean
   private network: Network
@@ -43,11 +46,15 @@ export class MissionProductService {
   constructor(options: MissionProductServiceOptions) {
     this.repo = options.repo
     this.cosmoPay = options.cosmoPay
-    this.telnyx = options.telnyx
+    const conn = options.connectivity || options.citrus || options.telnyx
+    if (!conn) {
+      throw new Error('ConnectivityProvider es requerido en MissionProductServiceOptions')
+    }
+    this.connectivity = conn
     this.voucherPort = options.voucherPort
     this.balancePort = options.balancePort
     this.channelPort = options.channelPort
-    this.hasTelnyxReal = options.hasTelnyxReal ?? false
+    this.hasCitrusReal = options.hasCitrusReal ?? options.hasTelnyxReal ?? false
     this.hasChannelReal = options.hasChannelReal ?? false
     this.hasVoucherAgentReal = options.hasVoucherAgentReal ?? false
     this.network = options.network ?? 'stellar:testnet'
@@ -60,8 +67,8 @@ export class MissionProductService {
   private getMissingConfiguration(): string[] {
     const missing: string[] = []
     if (!process.env.COSMOS_PAY_API_KEY) missing.push('COSMOS_PAY_API_KEY')
-    if (!process.env.TELNYX_API_KEY) missing.push('TELNYX_API_KEY')
-    if (!process.env.TELNYX_SIM_GROUP_ID) missing.push('TELNYX_SIM_GROUP_ID')
+    if (!process.env.CITRUS_API_KEY) missing.push('CITRUS_API_KEY')
+    if (!process.env.PRICE_PER_MB_RAW && !process.env.TELNYX_PRICE_PER_MB_USDC) missing.push('PRICE_PER_MB_RAW')
     if (!process.env.CHANNEL_CONTRACT) missing.push('CHANNEL_CONTRACT')
     if (!process.env.AGENT_VOUCHERS_URL) missing.push('AGENT_VOUCHERS_URL')
     if (!process.env.GATEWAY_TOKEN) missing.push('GATEWAY_TOKEN')
@@ -95,7 +102,7 @@ export class MissionProductService {
     }
 
     const channelConfigured = Boolean(process.env.CHANNEL_CONTRACT)
-    const telnyxReady = this.hasTelnyxReal
+    const citrusReady = this.hasCitrusReal
     const channelReady = this.hasChannelReal
     const cosmoPayStatus: Capabilities['cosmoPayStatus'] = this.cosmoPay.isMock
       ? (isLive ? 'unavailable' : 'mock')
@@ -103,7 +110,7 @@ export class MissionProductService {
 
     let meteringMode: Capabilities['meteringMode'] = 'demo'
     if (isLive) {
-      if (voucherAgentReady && channelReady && telnyxReady) {
+      if (voucherAgentReady && channelReady && citrusReady) {
         meteringMode = 'real'
       } else {
         meteringMode = 'unavailable'
@@ -114,9 +121,9 @@ export class MissionProductService {
 
     let mode: Capabilities['mode'] = 'demo'
     if (isLive) {
-      if (cosmoPayStatus === 'live' && telnyxReady && channelReady && voucherAgentReady) {
+      if (cosmoPayStatus === 'live' && citrusReady && channelReady && voucherAgentReady) {
         mode = 'live'
-      } else if (cosmoPayStatus === 'live' || telnyxReady || channelReady || voucherAgentReady) {
+      } else if (cosmoPayStatus === 'live' || citrusReady || channelReady || voucherAgentReady) {
         mode = 'partial'
       } else {
         mode = 'demo'
@@ -132,12 +139,13 @@ export class MissionProductService {
       paymentServerReady: true,
       voucherAgentReady,
       channelReady,
-      telnyxReady,
+      citrusReady,
+      connectivityProvider: this.hasCitrusReal ? 'citrus' : 'fake',
       cosmoPayStatus,
       cosmoPayMode: cosmoPayStatus,
-      telnyxStatus: telnyxReady ? 'live' : 'unavailable',
+      citrusStatus: citrusReady ? 'live' : 'unavailable',
       meteringMode,
-      reconciliationAvailable: telnyxReady,
+      reconciliationAvailable: citrusReady,
       demoTrafficEnabled: process.env.ENABLE_DEMO_TRAFFIC === 'true',
       mode,
       liveEnabled: isLive,
@@ -257,33 +265,36 @@ export class MissionProductService {
       throw new Error('No se puede activar una misión cuyo pago no ha sido validado')
     }
 
-    if (this.isLiveMode() && !this.hasTelnyxReal) {
-      const err = new Error('503: Servicio Telnyx no disponible en modo live (falta TELNYX_API_KEY o TELNYX_SIM_GROUP_ID)')
+    if (this.isLiveMode() && !this.hasCitrusReal) {
+      const err = new Error('503: Servicio Citrus Mobile no disponible en modo live (falta CITRUS_API_KEY)')
       ;(err as unknown as { statusCode: number }).statusCode = 503
       throw err
     }
 
     // Idempotent check
-    if (mission.status === 'active' && mission.simCardId && mission.activationCode) {
+    if (mission.status === 'active' && mission.iccid && mission.esim) {
       return {
-        activationCode: mission.activationCode,
-        simCardId: mission.simCardId,
-        iccid: mission.iccid,
-        channelId: mission.channelId,
+        missionId: mission.id,
         status: mission.status,
-        esimStatus: mission.esimStatus,
-        depositTxHash: mission.depositTxHash,
+        isMock: !this.hasCitrusReal,
+        esim: mission.esim,
       }
     }
 
-    const esim = await this.telnyx.purchaseEsim(mission.userId)
-    await this.telnyx.enable(esim.simCardId)
-
+    const esimRecord = await this.connectivity.provisionEsim(mission.userId)
     const channelId = mission.channelId || process.env.CHANNEL_CONTRACT || `SOROBAN-CHANNEL-${Date.now().toString(16).toUpperCase()}`
 
-    mission.simCardId = esim.simCardId
-    mission.iccid = esim.iccid
-    mission.activationCode = esim.activationCode
+    const publicEsim: PublicEsimInfo = {
+      iccid: esimRecord.iccid,
+      lpaString: esimRecord.lpaString,
+      qrCode: esimRecord.qrCode,
+      directInstallUrl: esimRecord.directInstallUrl,
+      status: esimRecord.status,
+      isMock: !this.hasCitrusReal,
+    }
+
+    mission.iccid = esimRecord.iccid
+    mission.esim = publicEsim
     mission.channelId = channelId
     mission.status = 'active'
     mission.esimStatus = 'active'
@@ -292,8 +303,7 @@ export class MissionProductService {
     const session = createConnectivitySession({
       id: `ses_${mission.id}`,
       userId: mission.userId,
-      simCardId: esim.simCardId,
-      iccid: esim.iccid,
+      iccid: esimRecord.iccid,
       channelId,
     })
     this.sessions.set(mission.id, session)
@@ -301,13 +311,10 @@ export class MissionProductService {
     await this.repo.save(mission)
 
     return {
-      activationCode: esim.activationCode,
-      simCardId: esim.simCardId,
-      iccid: esim.iccid,
-      channelId,
+      missionId: mission.id,
       status: 'active',
-      esimStatus: 'active',
-      depositTxHash: mission.depositTxHash,
+      isMock: !this.hasCitrusReal,
+      esim: publicEsim,
     }
   }
 
@@ -322,36 +329,42 @@ export class MissionProductService {
     if (!mission) throw new Error(`Misión ${missionId} no encontrada`)
 
     let session = this.sessions.get(missionId)
-    if (!session && mission.simCardId) {
+    if (!session && mission.iccid) {
       session = createConnectivitySession({
         id: `ses_${mission.id}`,
         userId: mission.userId,
-        simCardId: mission.simCardId,
-        iccid: mission.iccid || 'iccid_unknown',
+        iccid: mission.iccid,
         channelId: mission.channelId || 'channel_unknown',
       })
-      session.meteredBytes = BigInt(mission.meteredBytes || '0')
       this.sessions.set(missionId, session)
     }
 
-    if (!session) {
+    if (!session || !mission.iccid) {
       return {
+        chargedMicroUsd: '0',
+        walletMicroUsd: '0',
+        providerStatus: 'not_provisioned',
         meteredBytes: mission.meteredBytes,
         carrierBytes: '0',
         differenceBytes: mission.meteredBytes,
-        carrierStatus: 'not_provisioned',
+        isEstimation: true,
+        note: 'Estimación contable basada en tarifa en USDC',
       }
     }
 
-    const recon = await runReconciliation(session, { provider: this.telnyx })
-    mission.carrierBytes = recon.carrierBytes.toString()
-    await this.repo.save(mission)
+    const recon = await runReconciliation(session, { provider: this.connectivity })
+    const usage = await this.connectivity.getUsage(mission.iccid)
 
     return {
-      meteredBytes: recon.meteredBytes.toString(),
-      carrierBytes: recon.carrierBytes.toString(),
-      differenceBytes: recon.diffBytes.toString(),
-      carrierStatus: 'active',
+      chargedMicroUsd: recon.chargedMicroUsd.toString(),
+      tripChargedMicroUsd: recon.tripChargedMicroUsd.toString(),
+      walletMicroUsd: recon.walletMicroUsd.toString(),
+      providerStatus: usage.status,
+      meteredBytes: mission.meteredBytes,
+      carrierBytes: mission.carrierBytes,
+      differenceBytes: (BigInt(mission.meteredBytes) - BigInt(mission.carrierBytes)).toString(),
+      isEstimation: true,
+      note: 'Estimación contable basada en tarifa en USDC',
     }
   }
 
@@ -359,18 +372,21 @@ export class MissionProductService {
     const mission = await this.repo.findById(missionId)
     if (!mission) throw new Error(`Misión ${missionId} no encontrada`)
 
-    if (this.isLiveMode() && !this.hasTelnyxReal) {
-      const err = new Error('503: Servicio Telnyx no disponible en modo live')
+    if (this.isLiveMode() && !this.hasCitrusReal) {
+      const err = new Error('503: Servicio Citrus Mobile no disponible en modo live')
       ;(err as unknown as { statusCode: number }).statusCode = 503
       throw err
     }
 
-    if (mission.simCardId) {
-      await this.telnyx.disable(mission.simCardId)
+    if (mission.iccid) {
+      await this.connectivity.suspend(mission.iccid)
     }
 
     mission.esimStatus = 'paused'
     mission.status = 'paused'
+    if (mission.esim) {
+      mission.esim.status = 'suspended'
+    }
     await this.repo.save(mission)
 
     return { status: 'paused', esimStatus: 'paused' }
@@ -380,18 +396,21 @@ export class MissionProductService {
     const mission = await this.repo.findById(missionId)
     if (!mission) throw new Error(`Misión ${missionId} no encontrada`)
 
-    if (this.isLiveMode() && !this.hasTelnyxReal) {
-      const err = new Error('503: Servicio Telnyx no disponible en modo live')
+    if (this.isLiveMode() && !this.hasCitrusReal) {
+      const err = new Error('503: Servicio Citrus Mobile no disponible en modo live')
       ;(err as unknown as { statusCode: number }).statusCode = 503
       throw err
     }
 
-    if (mission.simCardId) {
-      await this.telnyx.enable(mission.simCardId)
+    if (mission.iccid) {
+      await this.connectivity.resume(mission.iccid)
     }
 
     mission.esimStatus = 'active'
     mission.status = 'active'
+    if (mission.esim) {
+      mission.esim.status = 'active'
+    }
     await this.repo.save(mission)
 
     return { status: 'active', esimStatus: 'active' }
@@ -465,6 +484,15 @@ export class MissionProductService {
       }
     }
 
+    if (mission.iccid) {
+      try {
+        const amountCents = Math.max(1, Math.round(topup.amountUsdc * 100))
+        await this.connectivity.topUp(mission.iccid, amountCents)
+      } catch {
+        // Safe fallback
+      }
+    }
+
     topup.status = 'settled'
     topup.txHash = txHash
     mission.balanceUsdc += topup.amountUsdc
@@ -498,9 +526,9 @@ export class MissionProductService {
       }
     }
 
-    if (mission.simCardId) {
+    if (mission.iccid) {
       try {
-        await this.telnyx.disable(mission.simCardId)
+        await this.connectivity.refundUnused(mission.iccid)
       } catch {
         // Fallback
       }
@@ -523,15 +551,13 @@ export class MissionProductService {
       session = createConnectivitySession({
         id: `ses_${mission.id}`,
         userId: mission.userId,
-        simCardId: mission.simCardId || `sim_${mission.id}`,
         iccid: mission.iccid || `iccid_${mission.id}`,
         channelId: mission.channelId || process.env.CHANNEL_CONTRACT || `channel_${mission.id}`,
       })
-      session.meteredBytes = BigInt(mission.meteredBytes || '0')
       this.sessions.set(mission.id, session)
     }
 
-    const pricePerMbRaw = BigInt(process.env.TELNYX_PRICE_PER_MB_USDC || 10000000)
+    const pricePerMbRaw = BigInt(process.env.PRICE_PER_MB_RAW || process.env.TELNYX_PRICE_PER_MB_USDC || 10000000)
     const voucherPricePerMibRaw = BigInt(process.env.PRICE_PER_MIB_RAW || pricePerMibFromPerMbRaw(pricePerMbRaw).toString())
 
     const balancePort: ChannelBalancePort = this.balancePort || {
@@ -546,7 +572,7 @@ export class MissionProductService {
 
     meterService = new IntegratedMeterService({
       session,
-      provider: this.telnyx,
+      provider: this.connectivity,
       balancePort,
       voucherPort: this.voucherPort,
       network: this.network,
@@ -570,8 +596,8 @@ export class MissionProductService {
       throw new Error('No se puede inyectar tráfico a una misión inactiva o pausada')
     }
 
-    if (this.isLiveMode() && (!this.hasVoucherAgentReal || !this.hasChannelReal || !this.hasTelnyxReal)) {
-      const err = new Error('503: Toda la cadena real (Voucher Agent, Soroban Channel y Telnyx) debe estar disponible en modo live para procesar tráfico')
+    if (this.isLiveMode() && (!this.hasVoucherAgentReal || !this.hasChannelReal || !this.hasCitrusReal)) {
+      const err = new Error('503: Toda la cadena real (Voucher Agent, Soroban Channel y Citrus) debe estar disponible en modo live para procesar tráfico')
       ;(err as unknown as { statusCode: number }).statusCode = 503
       throw err
     }
@@ -579,8 +605,8 @@ export class MissionProductService {
     const meterService = this.getOrCreateMeterService(mission)
     const result = await meterService.processTraffic(bytes)
 
-    const session = this.sessions.get(missionId)
-    const meteredBytesStr = session ? session.meteredBytes.toString() : (BigInt(mission.meteredBytes) + BigInt(bytes)).toString()
+    const currentBytes = BigInt(mission.meteredBytes || '0') + BigInt(bytes)
+    const meteredBytesStr = currentBytes.toString()
     mission.meteredBytes = meteredBytesStr
 
     const totalBytesNum = Number(meteredBytesStr)
@@ -591,7 +617,7 @@ export class MissionProductService {
     mission.consumedUsdc = parseFloat(costUsdc.toFixed(6))
     mission.balanceUsdc = Math.max(0, parseFloat((mission.budgetUsdc - costUsdc).toFixed(6)))
 
-    if (result.actionApplied.kind === 'disable' || mission.balanceUsdc <= 0) {
+    if (result.actionApplied.kind === 'suspend' || mission.balanceUsdc <= 0) {
       mission.status = 'paused'
       mission.esimStatus = 'paused'
     }

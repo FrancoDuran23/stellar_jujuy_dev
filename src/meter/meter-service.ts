@@ -1,25 +1,33 @@
 /**
  * Servidor / Integrador del Medidor con la Política de Corte y el Estado del Canal de Stellar.
- * 
+ *
  * Une:
- * - NetworkDataMeter (Medidor de tráfico en tiempo real)
+ * - NetworkDataMeter (Medidor de tráfico en tiempo real — hoy, el accounting local)
  * - VoucherPort (POST /vouchers del agente de pagos MPP — src/meter/voucher-port.ts)
- * - PolicyEnforcer (Reglas de decisión y cortes en Telnyx)
+ * - PolicyEnforcer (Reglas de decisión y cortes sobre la eSIM, docs/citrus-mobile-spec.md v2 §7 R8)
  * - ChannelBalancePort (Adaptador con la red de Stellar/Soroban)
  *
  * Regla central: la cuota del medidor SOLO se acredita con un vale firmado
  * (`status: "signed"`, nuevo o `reused`) que cubra el acumulado medido. Un
  * rechazo no reintentable (`channel_exhausted`, `channel_closing`, ...) no
- * acredita nada: el medidor corta solo al superar la cuota impaga y la
- * política de Telnyx sigue decidiendo sobre el depósito del canal.
+ * acredita nada: el medidor corta solo al superar la cuota impaga, y la
+ * política decide el corte de datos del canal (`suspend` la eSIM).
+ *
+ * Dos entradas:
+ * - `processTraffic(bytesTransferred)`: registra una ráfaga real en el medidor y
+ *   procesa el nuevo acumulado (escalón legacy / demos; el agente factura bytes).
+ * - `processCumulative(cumulativeBytes)`: procesa un acumulado EXTERNO (los
+ *   "bytes equivalentes" del spec §6.2 que el usage-loop deriva del consumo
+ *   cargado por Citrus). No registra tráfico local: el número YA es el
+ *   acumulado por el que se pide el vale.
  */
 
 import { NetworkDataMeter, type MeterConfig } from "./demo-meter.ts";
 import {
   decidePolicy,
+  computeCostRaw,
   type ChannelBalancePort,
   type EnforcementAction,
-  BYTES_PER_MB,
 } from "../services/PolicyEnforcer.ts";
 import type { ConnectivityProvider } from "../providers/connectivity/ConnectivityProvider.ts";
 import type { ConnectivitySession } from "../models/ConnectivitySession.ts";
@@ -59,8 +67,8 @@ export interface MeterServiceOptions {
    * `PRICE_PER_MIB_RAW` del agente (raw units por MiB = 1_048_576 bytes).
    * Es el precio del VALE y debe ser idéntico al del agente (CF-R2), o el
    * agente responde `amount_rejected`. Distinto de `pricePerMbRaw`, que es
-   * el precio por MB decimal que usa la política de Telnyx; ambos tienen que
-   * ser la misma tarifa (`arePricesAligned`) o el constructor lanza.
+   * el precio por MB decimal de la política (PRICE_PER_MB_RAW); ambos tienen
+   * que ser la misma tarifa (`arePricesAligned`) o el constructor lanza.
    */
   voucherPricePerMibRaw: bigint;
   meterConfig?: Partial<MeterConfig>;
@@ -78,6 +86,12 @@ export type VoucherRequestResult =
   | { kind: "unsigned"; envelope: Message2Unsigned }
   /** No hubo respuesta de negocio utilizable (red, 401/400, contrato roto). */
   | { kind: "unavailable"; detail: string };
+
+type MeterRunResult = {
+  meterStatus: ReturnType<NetworkDataMeter["getStatus"]>;
+  actionApplied: EnforcementAction;
+  voucher: VoucherRequestResult;
+};
 
 export class IntegratedMeterService {
   private meter: NetworkDataMeter;
@@ -169,66 +183,61 @@ export class IntegratedMeterService {
   }
 
   /**
+   * Procesa un ACUMULADO externo (bytes equivalentes del spec §6.2 — la base
+   * que pide el usage-loop / el vale final del cierre, R9): pide el vale,
+   * evalúa la política contra el depósito del canal y suspende la eSIM si el
+   * canal se agotó. No registra tráfico: `cumulativeBytes` YA es el acumulado.
+   */
+  public async processCumulative(cumulativeBytes: number): Promise<MeterRunResult> {
+    const voucher = await this.requestVoucher(cumulativeBytes);
+    const balanceRaw = await this.balancePort.getChannelBalance(this.session.channelId);
+    const costRaw = computeCostRaw(BigInt(cumulativeBytes), this.pricePerMbRaw);
+    const action = decidePolicy({ balanceRaw, costRaw, pricePerMbRaw: this.pricePerMbRaw });
+
+    if (action.kind === "suspend") {
+      this.logger(`🚨 [POLICY ENFORCER] Suspendiendo eSIM (canal agotado): ${action.reason}`);
+      await this.provider.suspend(this.session.iccid);
+    } else {
+      this.logger(`✅ [POLICY ENFORCER] Consumo dentro del saldo del canal. Sin suspensión.`);
+    }
+
+    if (action.kind === "noop" && voucher.kind === "signed") {
+      this.meter.creditPaidQuota(cumulativeBytes);
+    }
+
+    return { meterStatus: this.meter.getStatus(), actionApplied: action, voucher };
+  }
+
+  /**
    * Registra una ráfaga de tráfico en el medidor, pide el vale acumulativo
    * al agente de pagos y ejecuta la evaluación de políticas contra el
-   * depósito del canal en Stellar y la SIM en Telnyx. La cuota del medidor
-   * solo se acredita si el agente firmó (o reusó) un vale que la cubre.
+   * depósito del canal en Stellar y la eSIM. La cuota del medidor solo se
+   * acredita si el agente firmó (o reusó) un vale que la cubra.
    */
-  public async processTraffic(bytesTransferred: number): Promise<{
-    meterStatus: ReturnType<NetworkDataMeter["getStatus"]>;
-    actionApplied: EnforcementAction;
-    voucher: VoucherRequestResult;
-  }> {
+  public async processTraffic(bytesTransferred: number): Promise<MeterRunResult> {
     // 1. Registrar tráfico en el medidor local
     const { cumulativeBytes } = this.meter.recordTraffic(bytesTransferred);
-    this.session.meteredBytes = BigInt(cumulativeBytes);
 
     // 2. Pedir el vale acumulativo que cubre el consumo medido (POST /vouchers)
     const voucher = await this.requestVoucher(cumulativeBytes);
 
-    // 3. Consultar el depósito del canal de Stellar
+    // 3. Consultar el depósito del canal de Stellar y evaluar la política
     const balanceRaw = await this.balancePort.getChannelBalance(this.session.channelId);
+    const costRaw = computeCostRaw(BigInt(cumulativeBytes), this.pricePerMbRaw);
+    const action = decidePolicy({ balanceRaw, costRaw, pricePerMbRaw: this.pricePerMbRaw });
 
-    // 4. Evaluar la política de corte
-    const costRaw = (BigInt(cumulativeBytes) * this.pricePerMbRaw) / BYTES_PER_MB;
-    const action = decidePolicy({
-      balanceRaw,
-      costRaw,
-      pricePerMbRaw: this.pricePerMbRaw,
-    });
-
-    // 5. Aplicar los efectos secundarios en Telnyx si corresponde y sincronizar la cuota
-    switch (action.kind) {
-      case "disable":
-        this.logger(`🚨 [POLICY ENFORCER] Deshabilitando SIM en Telnyx: ${action.reason}`);
-        await this.provider.disable(this.session.simCardId);
-        break;
-
-      case "set_data_limit":
-        this.logger(`📉 [POLICY ENFORCER] Ajustando tope de datos en Telnyx a ${action.mb} MB`);
-        await this.provider.setDataLimit(this.session.simCardId, action.mb);
-        // Acreditar cuota solo contra un vale firmado por el agente
-        this.creditIfSigned(voucher, cumulativeBytes);
-        break;
-
-      case "noop":
-        this.logger(`✅ [POLICY ENFORCER] Tráfico dentro del saldo. Sin cambios en Telnyx.`);
-        // Acreditar cuota solo contra un vale firmado por el agente
-        this.creditIfSigned(voucher, cumulativeBytes);
-        break;
+    // 4. Aplicar los efectos secundarios en la eSIM si corresponde y sincronizar la cuota
+    if (action.kind === "suspend") {
+      this.logger(`🚨 [POLICY ENFORCER] Suspendiendo eSIM (canal agotado): ${action.reason}`);
+      await this.provider.suspend(this.session.iccid);
+    } else {
+      this.logger(`✅ [POLICY ENFORCER] Tráfico dentro del saldo. Sin cambios en la eSIM.`);
     }
-
-    return {
-      meterStatus: this.meter.getStatus(),
-      actionApplied: action,
-      voucher,
-    };
-  }
-
-  private creditIfSigned(voucher: VoucherRequestResult, cumulativeBytes: number): void {
-    if (voucher.kind === "signed") {
+    if (action.kind === "noop" && voucher.kind === "signed") {
       this.meter.creditPaidQuota(cumulativeBytes);
     }
+
+    return { meterStatus: this.meter.getStatus(), actionApplied: action, voucher };
   }
 
   public getMeter(): NetworkDataMeter {

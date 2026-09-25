@@ -7,7 +7,7 @@ import { MissionProductService } from './services/MissionProductService.ts'
 import type { MissionRepository } from './persistence/MissionRepository.ts'
 import type { ProductMission } from './types/mission.ts'
 import { CosmoPayService } from '../services/CosmoPayService.ts'
-import type { ConnectivityProvider, EsimRecord, SimUsage } from '../providers/connectivity/ConnectivityProvider.ts'
+import { FakeProvider } from '../providers/connectivity/FakeProvider.ts'
 import { type VoucherPort } from '../meter/voucher-port.ts'
 import type { Message1, Message2 } from '../shared/messages.ts'
 
@@ -31,38 +31,6 @@ class MemoryRepo implements MissionRepository {
 
   async findAll(): Promise<ProductMission[]> {
     return Array.from(this.store.values())
-  }
-}
-
-class FakeTelnyx implements ConnectivityProvider {
-  purchasedCount = 0
-  disabledCount = 0
-  enabledCount = 0
-  setDataLimitCalls: Array<{ simCardId: string; mb: number }> = []
-
-  async purchaseEsim(userId: string): Promise<EsimRecord> {
-    this.purchasedCount++
-    return {
-      simCardId: `sim_test_${this.purchasedCount}`,
-      iccid: `8954000${this.purchasedCount}`,
-      activationCode: `LPA:1$rsp.test$TEST_${userId}`,
-    }
-  }
-
-  async enable(): Promise<void> {
-    this.enabledCount++
-  }
-
-  async disable(): Promise<void> {
-    this.disabledCount++
-  }
-
-  async setDataLimit(simCardId: string, mb: number): Promise<void> {
-    this.setDataLimitCalls.push({ simCardId, mb })
-  }
-
-  async getUsage(): Promise<SimUsage> {
-    return { mb: 2, status: 'enabled' }
   }
 }
 
@@ -110,21 +78,21 @@ class MockVoucherPort implements VoucherPort {
 
 let server: http.Server
 let baseUrl: string
-let telnyx: FakeTelnyx
+let fakeProvider: FakeProvider
 let mockVoucherPort: MockVoucherPort
 let service: MissionProductService
 
 before(async () => {
   const repo = new MemoryRepo()
   const cosmoPay = new CosmoPayService() // Mock mode
-  telnyx = new FakeTelnyx()
+  fakeProvider = new FakeProvider()
   mockVoucherPort = new MockVoucherPort()
   service = new MissionProductService({
     repo,
     cosmoPay,
-    telnyx,
+    connectivity: fakeProvider,
     voucherPort: mockVoucherPort,
-    hasTelnyxReal: true,
+    hasCitrusReal: true,
     hasChannelReal: true,
     hasVoucherAgentReal: true,
   })
@@ -157,6 +125,7 @@ test('GET /api/capabilities returns detailed readiness without leaking secrets',
   assert.equal(typeof body.network, 'string')
   assert.equal(typeof body.paymentServerReady, 'boolean')
   assert.equal(Array.isArray(body.missingConfiguration), true)
+  assert.equal(body.connectivityProvider, 'citrus')
 
   const rawStr = JSON.stringify(body)
   assert.equal(rawStr.includes('private_key'), false)
@@ -193,9 +162,10 @@ test('processTraffic executes IntegratedMeterService & passes M1 to VoucherPort 
   }
 
   const actRes = await fetch(`${baseUrl}/api/missions/${missionId}/activate`, { method: 'POST' })
-  if (actRes.status !== 200) {
-    console.error('actRes error:', await actRes.text())
-  }
+  assert.equal(actRes.status, 200)
+  const actBody = (await actRes.json()) as { esim?: { iccid: string; lpaString: string } }
+  assert.ok(actBody.esim?.iccid)
+  assert.ok(actBody.esim?.lpaString)
 
   mockVoucherPort.mode = 'signed'
   mockVoucherPort.requestedM1s = []
@@ -223,18 +193,18 @@ test('processTraffic executes IntegratedMeterService & passes M1 to VoucherPort 
   assert.equal(mockVoucherPort.requestedM1s.length, 1)
   assert.equal(mockVoucherPort.requestedM1s[0].cumulativeBytes, 1000000)
 
-  // 3. Usage route executes reconciliation
+  // 3. Usage route executes Citrus getUsage
   const usageRes = await fetch(`${baseUrl}/api/missions/${missionId}/usage`)
   assert.equal(usageRes.status, 200)
   const usageBody = (await usageRes.json()) as {
     meteredBytes: string
-    carrierBytes: string
-    differenceBytes: string
+    chargedMicroUsd: string
+    walletMicroUsd: string
+    isEstimation: boolean
   }
 
   assert.equal(usageBody.meteredBytes, '1000000')
-  assert.equal(usageBody.carrierBytes, '2000000') // 2 MB returned by FakeTelnyx
-  assert.equal(usageBody.differenceBytes, '-1000000')
+  assert.equal(usageBody.isEstimation, true)
 })
 
 test('Unsigned M2 does NOT credit paid quota', async () => {

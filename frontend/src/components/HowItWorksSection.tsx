@@ -79,7 +79,7 @@ export default function HowItWorksSection() {
                 <path d="M 36 84 A 28 28 0 0 0 84 84" opacity="0.7" stroke="#31C48D" strokeDasharray="3 3" strokeWidth="1.5" />
                 <circle cx="60" cy="96" fill="#31C48D" r="3.5" />
               </svg>
-              <span className="absolute bottom-2 left-3 font-mono text-[9px] font-semibold text-online tracking-widest">[ TELNYX eSIM LINK ]</span>
+              <span className="absolute bottom-2 left-3 font-mono text-[9px] font-semibold text-online tracking-widest">[ CITRUS eSIM LINK ]</span>
             </div>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">

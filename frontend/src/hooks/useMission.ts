@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { demoMissionService } from '../services/DemoMissionService'
-import { apiMissionService } from '../services/ApiMissionService'
+import { ApiMissionService } from '../services/ApiMissionService'
 import type { MissionService } from '../services/MissionService'
 import type { MissionState } from '../types/mission'
+
+const apiMissionService = new ApiMissionService()
 
 export function useMission() {
   const [activeService, setActiveService] = useState<MissionService>(demoMissionService)

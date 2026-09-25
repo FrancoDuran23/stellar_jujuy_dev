@@ -13,6 +13,15 @@ export type Destination = {
   pricePerMbUsdc: number
 }
 
+export type PublicEsimInfo = {
+  iccid: string
+  lpaString: string
+  qrCode: string
+  directInstallUrl: string
+  status: string
+  isMock?: boolean
+}
+
 export type Mission = {
   id: string
   origin: string
@@ -32,6 +41,9 @@ export type Mission = {
   esimStatus: 'active' | 'paused' | 'disabled'
   network: Network
   channelId: string        // mock Soroban channel id
+  iccid?: string
+  esim?: PublicEsimInfo
+  isMock?: boolean
   createdAt: string        // ISO timestamp
 }
 

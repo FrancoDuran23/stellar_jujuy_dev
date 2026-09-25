@@ -24,6 +24,15 @@ export type TopUpRecord = {
   createdAt: string
 }
 
+export type PublicEsimInfo = {
+  iccid: string
+  lpaString: string
+  qrCode: string
+  directInstallUrl: string
+  status: string
+  isMock?: boolean
+}
+
 export type ProductMission = {
   id: string
   userId: string
@@ -40,9 +49,8 @@ export type ProductMission = {
   paymentIntentId?: string
   depositTxHash?: string
   channelId?: string
-  simCardId?: string
   iccid?: string
-  activationCode?: string
+  esim?: PublicEsimInfo
   esimStatus: 'active' | 'paused' | 'disabled' | 'not_provisioned'
   meteredBytes: string // string representation of bigint
   carrierBytes: string // string representation of bigint
@@ -64,10 +72,11 @@ export type Capabilities = {
   paymentServerReady: boolean
   voucherAgentReady: boolean
   channelReady: boolean
-  telnyxReady: boolean
+  citrusReady: boolean
+  connectivityProvider: 'fake' | 'citrus'
   cosmoPayStatus: 'live' | 'mock' | 'unavailable'
   cosmoPayMode: 'live' | 'mock' | 'unavailable'
-  telnyxStatus: 'live' | 'unavailable'
+  citrusStatus: 'live' | 'unavailable'
   meteringMode: 'real' | 'demo' | 'unavailable'
   reconciliationAvailable: boolean
   demoTrafficEnabled: boolean

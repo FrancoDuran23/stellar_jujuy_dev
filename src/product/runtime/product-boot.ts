@@ -1,6 +1,7 @@
 import { CosmoPayService } from '../../services/CosmoPayService.ts'
-import { createTelnyxProvider } from '../../providers/connectivity/TelnyxProvider.ts'
-import type { ConnectivityProvider, EsimRecord, SimUsage } from '../../providers/connectivity/ConnectivityProvider.ts'
+import { createConnectivityProvider } from '../../providers/connectivity/createConnectivityProvider.ts'
+import { FakeProvider } from '../../providers/connectivity/FakeProvider.ts'
+import type { ConnectivityProvider } from '../../providers/connectivity/ConnectivityProvider.ts'
 import { createServerChannelStatePort } from '../../config/boot.ts'
 import { createStellarChannelBalanceAdapter } from '../../meter/meter-service.ts'
 import type { ChannelBalancePort } from '../../services/PolicyEnforcer.ts'
@@ -10,25 +11,6 @@ import { FileMissionRepository } from '../persistence/MissionRepository.ts'
 import { MissionProductService } from '../services/MissionProductService.ts'
 import type { Network } from '../../shared/stellar/network.ts'
 
-class MockConnectivityProvider implements ConnectivityProvider {
-  async purchaseEsim(userId: string): Promise<EsimRecord> {
-    const id = `sim_mock_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-    const iccid = `8954000${Math.floor(Math.random() * 1e12)}`
-    return {
-      simCardId: id,
-      iccid,
-      activationCode: `LPA:1$rsp.astroam.demo$DEMO_${userId.toUpperCase()}_${Date.now()}`,
-    }
-  }
-
-  async enable(_simCardId: string): Promise<void> {}
-  async disable(_simCardId: string): Promise<void> {}
-  async setDataLimit(_simCardId: string, _mb: number): Promise<void> {}
-  async getUsage(_simCardId: string): Promise<SimUsage> {
-    return { mb: 0, status: 'enabled' }
-  }
-}
-
 export function bootProductService(env: Record<string, string | undefined> = process.env): MissionProductService {
   const repo = new FileMissionRepository(env.DATA_DIR)
   const cosmoPay = new CosmoPayService({
@@ -36,18 +18,27 @@ export function bootProductService(env: Record<string, string | undefined> = pro
     destination: env.COSMOS_PAY_DESTINATION,
   })
 
-  let telnyx: ConnectivityProvider
-  let hasTelnyxReal = false
+  let connectivity: ConnectivityProvider
+  let hasCitrusReal = false
+  const providerKind = (env.CONNECTIVITY_PROVIDER === 'citrus' ? 'citrus' : 'fake')
 
-  if (env.TELNYX_API_KEY && env.TELNYX_SIM_GROUP_ID) {
+  if (providerKind === 'citrus' && env.CITRUS_API_KEY) {
     try {
-      telnyx = createTelnyxProvider(env as NodeJS.ProcessEnv)
-      hasTelnyxReal = true
+      const bundle = createConnectivityProvider({
+        CONNECTIVITY_PROVIDER: 'citrus',
+        CITRUS_API_KEY: env.CITRUS_API_KEY,
+        CITRUS_BASE_URL: env.CITRUS_BASE_URL,
+        PRICE_PER_MB_RAW: BigInt(env.PRICE_PER_MB_RAW || env.TELNYX_PRICE_PER_MB_USDC || 10000000),
+        STELLAR_NETWORK: env.STELLAR_NETWORK || env.NETWORK || 'stellar:testnet',
+        DATA_DIR: env.DATA_DIR || './data',
+      })
+      connectivity = bundle.provider
+      hasCitrusReal = true
     } catch {
-      telnyx = new MockConnectivityProvider()
+      connectivity = new FakeProvider()
     }
   } else {
-    telnyx = new MockConnectivityProvider()
+    connectivity = new FakeProvider()
   }
 
   // 1. VoucherPort
@@ -118,11 +109,11 @@ export function bootProductService(env: Record<string, string | undefined> = pro
   return new MissionProductService({
     repo,
     cosmoPay,
-    telnyx,
+    connectivity,
     voucherPort,
     balancePort,
     channelPort,
-    hasTelnyxReal,
+    hasCitrusReal,
     hasChannelReal,
     hasVoucherAgentReal,
     network: networkStr,

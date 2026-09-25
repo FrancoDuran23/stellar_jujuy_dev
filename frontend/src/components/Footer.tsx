@@ -16,7 +16,7 @@ export default function Footer() {
 
         {/* Copyright */}
         <p className="text-xs text-textsecondary text-center md:text-left">
-          Conectividad soberana sin fronteras. Diseñado sobre Stellar Soroban y red Telnyx.
+          Conectividad soberana sin fronteras. Diseñado sobre Stellar Soroban y red Citrus Mobile.
         </p>
 
         {/* Nav links */}

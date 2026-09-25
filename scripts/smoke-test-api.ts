@@ -77,8 +77,8 @@ server.listen(0, '127.0.0.1', async () => {
 
     // 7. POST /api/missions/:id/activate
     const actRes = await fetch(`${base}/api/missions/${mData.id}/activate`, { method: 'POST' })
-    const actData = (await actRes.json()) as { activationCode: string; esimStatus: string }
-    console.log(`POST /api/missions/:id/activate -> HTTP ${actRes.status}:`, { esimStatus: actData.esimStatus, activationCode: actData.activationCode })
+    const actData = (await actRes.json()) as { status: string; esim?: { iccid: string; lpaString: string } }
+    console.log(`POST /api/missions/:id/activate -> HTTP ${actRes.status}:`, { status: actData.status, esim: actData.esim })
 
     // 8. GET /api/missions/:id
     const gRes = await fetch(`${base}/api/missions/${mData.id}`)

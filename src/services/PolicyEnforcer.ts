@@ -1,45 +1,41 @@
-// PolicyEnforcer (connectivity layer): the decision loop that turns "bytes
-// measured by the gateway × price per MB" into concrete Telnyx actions.
+// PolicyEnforcer (connectivity layer, docs/citrus-mobile-spec.md v2 §7 R8):
+// the channel-budget decision. It turns "cumulative accounting bytes × price
+// per MB" into a concrete provider action.
 //
-// It is designed to run on a timer (every 5s) and, from the channel budget:
-// - while the remaining balance is above the low watermark (20% of deposit):
-//   NOOP — keep serving;
-// - once remaining ≤ 20% of the deposit: tighten the SIM's `data_limit` to
-//   the MB the remaining balance can still pay;
-// - once remaining ≈ 0 (or the remaining balance cannot pay even 1 MB):
-//   DISABLE the SIM — data cutoff.
+// The WEBHOOK is the real data cutoff in this architecture (D5): Citrus cuts
+// data itself when the eSIM wallet hits 0, and the cap policy (unpaid cap,
+// usage-loop) suspends/resumes around it. R8 *simplified* this loop to what the
+// channel budget can still enforce:
+// - remaining > 0 and ≥ 1 MB payable: NOOP — keep serving;
+// - remaining ≈ 0 (cost covers the deposit, or not even 1 MB remains payable):
+//   SUSPEND the eSIM — data cutoff.
 //
 // The decision is pure (`decidePolicy`) and separated from the side effects
 // (`runOnce` applies it through the ConnectivityProvider), so tests verify the
 // math without touching a network.
 //
-// Balance semantics (resolved against the channel code): `getChannelBalance`
+// Balance semantics (unchanged since the original enforcer): `getChannelBalance`
 // returns the channel's CUMULATIVE DEPOSIT in raw units (1e-7 USDC) — NOT a
 // remaining balance. The real adapter is `createStellarChannelBalanceAdapter`
-// (`src/meter/meter-service.ts`), which reads `ChannelChainInfo.depositRaw`
-// (`config/boot.ts`: the contract's `deposited()` getter, falling back to the
-// local `channel:open`/`top-up` record, and last to on-chain `balance()` as a
-// conservative lower bound). That is the right basis because `costRaw` is
-// cumulative since channel open, so `remaining = deposit − cost` — the same
-// basis the agent uses for M2 `remaining` (deposit − highest signed amount).
-// On-chain `balance()` (`depositRaw`'s sibling `balanceRaw`) must NOT be used
-// here: it drops on every server `settle()`, and subtracting the cumulative
-// cost from it would double-count what was already collected. The 20%
-// watermark below is therefore "20% of the deposit", as documented.
-// `STUB_CHANNEL_BALANCE_PORT` remains the default only for callers that do
-// not inject a port.
+// (`src/meter/meter-service.ts`). `costRaw` is computed from the trip's
+// EQUIVALENT accounting bytes (spec §6.2 — the bytes the agent bills, which
+// derive from the provider's charged micro-USD); `remaining = deposit − cost`,
+// the same basis the agent uses for M2 `remaining` (deposit − highest signed
+// amount). On-chain `balance()` must NOT be used here (it drops on every
+// server `settle()`; subtracting cumulative cost from it would double-count).
+//
+// Dropped in the rework (R8): the low-balance watermark and `set_data_limit`
+// (data limits are delegated to the eSIM wallet, the cap is the prepaid amount
+// itself), and `disable` (now `suspend` — the eSIM must stay provisioned to
+// keep its ethernet/identity; see EsimRecordStatus "cut"/"suspended").
 
 import { ceilDiv, parseNonNegativeIntegerRaw } from "../shared/money.ts";
+import { equivalentBytes } from "../shared/usage-math.ts";
 import type { ConnectivityProvider } from "../providers/connectivity/ConnectivityProvider.ts";
 import type { ConnectivitySession } from "../models/ConnectivitySession.ts";
 
-/** Carrier billing uses decimal MB: 1 MB = 1 000 000 bytes (NOT MiB). This is
- * also the unit the Telnyx MB figures are compared against in reconciliation. */
+/** Carrier billing uses decimal MB: 1 MB = 1 000 000 bytes (NOT MiB). */
 export const BYTES_PER_MB = 1_000_000n;
-
-/** Default low-balance watermark: change the data limit once the remaining
- * balance drops to this fraction of the deposit (2000 bps = 20%). */
-export const LOW_BALANCE_BPS_DEFAULT = 2000;
 
 /** Suggested cadence for the enforcement loop (the task's "setInterval 5s"). */
 export const ENFORCER_INTERVAL_MS_DEFAULT = 5_000;
@@ -62,8 +58,8 @@ export const STUB_CHANNEL_BALANCE_PORT: ChannelBalancePort = {
 
 export type Logger = (line: unknown) => void;
 
-/** Cost of the consumed bytes, in raw USDC units, at `pricePerMbRaw` raw units
- * per MB. Ceiling division keeps a full session's rounding error bounded. */
+/** Cost of the billed accounting bytes, in raw USDC units, at `pricePerMbRaw`
+ * raw units per MB. Ceiling division keeps a full session's rounding bounded. */
 export function computeCostRaw(meteredBytes: bigint, pricePerMbRaw: bigint): bigint {
   if (pricePerMbRaw <= 0n) {
     throw new RangeError("computeCostRaw: pricePerMbRaw debe ser positivo");
@@ -75,21 +71,17 @@ export type DecideInput = {
   /** Channel cumulative deposit (`getChannelBalance`), raw units — never the
    * remaining balance: `remaining` is derived here as deposit − cost. */
   balanceRaw: bigint;
-  /** Cost accrued so far from gateway-measured bytes, raw units. */
+  /** Cost accrued so far from the accounting bytes, raw units. */
   costRaw: bigint;
-  /** Price per MB, raw units (same encoding as `TELNYX_PRICE_PER_MB_USDC`). */
+  /** Price per MB, raw units (PRICE_PER_MB_RAW). */
   pricePerMbRaw: bigint;
 };
 
 export type EnforcementAction =
-  | { kind: "set_data_limit"; mb: number; remainingRaw: bigint }
-  | { kind: "disable"; remainingRaw: bigint; reason: string }
+  | { kind: "suspend"; remainingRaw: bigint; reason: string }
   | { kind: "noop"; remainingRaw: bigint };
 
-export function decidePolicy(
-  input: DecideInput,
-  lowBalanceBps: number = LOW_BALANCE_BPS_DEFAULT,
-): EnforcementAction {
+export function decidePolicy(input: DecideInput): EnforcementAction {
   if (input.pricePerMbRaw <= 0n) {
     throw new RangeError("decidePolicy: pricePerMbRaw debe ser positivo");
   }
@@ -97,25 +89,18 @@ export function decidePolicy(
 
   // Remaining ≈ 0: the balance cannot cover the accrued cost at all.
   if (remainingRaw === 0n) {
-    return { kind: "disable", remainingRaw, reason: "saldo del canal agotado (remaining == 0)" };
+    return { kind: "suspend", remainingRaw, reason: "saldo del canal agotado (remaining == 0)" };
   }
 
   // The price is known positive (enforced upstream); the whole MB this balance
-  // can still pay. If even 1 MB is unpayable, there is nothing left to meter.
+  // can still pay. If even 1 MB is unpayable, there is nothing left to serve.
   const payableMb = remainingRaw / input.pricePerMbRaw;
   if (payableMb <= 0n) {
     return {
-      kind: "disable",
+      kind: "suspend",
       remainingRaw,
       reason: "el saldo restante no alcanza ni para 1 MB",
     };
-  }
-
-  // Low watermark: once ≤ `lowBalanceBps`/10000 of the deposited budget is
-  // left, tighten the SIM's data limit to what remains payable.
-  const lowWatermarkRaw = (input.balanceRaw * BigInt(lowBalanceBps)) / 10_000n;
-  if (remainingRaw <= lowWatermarkRaw) {
-    return { kind: "set_data_limit", mb: Number(payableMb), remainingRaw };
   }
 
   return { kind: "noop", remainingRaw };
@@ -124,9 +109,13 @@ export function decidePolicy(
 export type PolicyEnforcerOptions = {
   provider: ConnectivityProvider;
   channelBalancePort?: ChannelBalancePort;
-  /** Raw USDC units per MB — normally from TELNYX_PRICE_PER_MB_USDC. */
+  /** Raw USDC units per MB — normally from PRICE_PER_MB_RAW. */
   pricePerMbRaw?: bigint;
-  lowBalanceBps?: number;
+  /** Markup applied by the usage loop to turn charged micro-USD into the
+   * accounting bytes the enforcer bills against (spec §6.2). */
+  markupBps?: number;
+  /** USDC/USD rate, basis points (same unit as usage-loop). */
+  usdcUsdRateBps?: number;
   logger?: Logger;
 };
 
@@ -134,25 +123,23 @@ export function createPolicyEnforcer(
   options: PolicyEnforcerOptions,
   env: NodeJS.ProcessEnv = process.env,
 ): PolicyEnforcer {
-  const pricePerMbRaw =
-    options.pricePerMbRaw ?? readPriceRaw(env);
-  return new PolicyEnforcer({
-    ...options,
-    pricePerMbRaw,
-  });
+  const pricePerMbRaw = options.pricePerMbRaw ?? readPriceRaw(env);
+  return new PolicyEnforcer({ ...options, pricePerMbRaw });
 }
 
 function readPriceRaw(env: NodeJS.ProcessEnv): bigint {
-  const raw = env.TELNYX_PRICE_PER_MB_USDC;
+  const raw = env.PRICE_PER_MB_RAW;
   if (raw === undefined || raw === "") {
     throw new Error(
-      "Falta TELNYX_PRICE_PER_MB_USDC — precio por MB en USDC raw units (1e-7 USDC). " +
+      "Falta PRICE_PER_MB_RAW — precio por MB en USDC raw units (1e-7 USDC). " +
       "Definilo en el .env para que el enforcer pueda decidir cortes.",
     );
   }
   const parsed = parseNonNegativeIntegerRaw(raw);
   if (parsed === undefined) {
-    throw new Error(`TELNYX_PRICE_PER_MB_USDC debe ser un entero no negativo (raw units), recibí "${raw}"`);
+    throw new Error(
+      `PRICE_PER_MB_RAW debe ser un entero no negativo (raw units), recibí "${raw}"`,
+    );
   }
   return parsed;
 }
@@ -161,22 +148,35 @@ export class PolicyEnforcer {
   private readonly provider: ConnectivityProvider;
   private readonly channelBalancePort: ChannelBalancePort;
   private readonly pricePerMbRaw: bigint;
-  private readonly lowBalanceBps: number;
+  private readonly markupBps: number;
+  private readonly usdcUsdRateBps: number;
   private readonly logger: Logger;
 
   constructor(options: PolicyEnforcerOptions & { pricePerMbRaw: bigint }) {
     this.provider = options.provider;
     this.channelBalancePort = options.channelBalancePort ?? STUB_CHANNEL_BALANCE_PORT;
     this.pricePerMbRaw = options.pricePerMbRaw;
-    this.lowBalanceBps = options.lowBalanceBps ?? LOW_BALANCE_BPS_DEFAULT;
+    this.markupBps = options.markupBps ?? 15_000;
+    this.usdcUsdRateBps = options.usdcUsdRateBps ?? 10_000;
     this.logger = options.logger ?? ((line) => console.log(JSON.stringify(line)));
   }
 
-  /** Pure decision for a session's current state. Never touches Telnyx. */
+  /** Billed bytes := equivalent bytes of THIS trip's charged consumption (the
+   * provider reports lifetime charged, so the trip is charged − baseline, R13).
+   * Pure decision; never touches the provider beyond the balance port. */
   async decide(session: ConnectivitySession): Promise<EnforcementAction> {
+    const tripChargedMicroUsd = session.chargedMicroUsd > session.chargedBaselineMicroUsd
+      ? session.chargedMicroUsd - session.chargedBaselineMicroUsd
+      : 0n;
+    const eqBytes = equivalentBytes(
+      tripChargedMicroUsd,
+      this.markupBps,
+      this.usdcUsdRateBps,
+      this.pricePerMbRaw,
+    );
     const balanceRaw = await this.channelBalancePort.getChannelBalance(session.channelId);
-    const costRaw = computeCostRaw(session.meteredBytes, this.pricePerMbRaw);
-    return decidePolicy({ balanceRaw, costRaw, pricePerMbRaw: this.pricePerMbRaw }, this.lowBalanceBps);
+    const costRaw = computeCostRaw(eqBytes, this.pricePerMbRaw);
+    return decidePolicy({ balanceRaw, costRaw, pricePerMbRaw: this.pricePerMbRaw });
   }
 
   /** Applies `decide`'s outcome through the provider. */
@@ -196,8 +196,7 @@ export class PolicyEnforcer {
             reason: "policy_enforcement",
             sessionId: session.id,
             action: action.kind,
-            ...(action.kind === "set_data_limit" ? { mb: action.mb } : {}),
-            ...(action.kind === "disable" ? { reason: action.reason } : {}),
+            ...(action.kind === "suspend" ? { reason: action.reason } : {}),
             remainingRaw: action.remainingRaw.toString(),
           });
         },
@@ -216,11 +215,8 @@ export class PolicyEnforcer {
 
   private async apply(action: EnforcementAction, session: ConnectivitySession): Promise<void> {
     switch (action.kind) {
-      case "set_data_limit":
-        await this.provider.setDataLimit(session.simCardId, action.mb);
-        return;
-      case "disable":
-        await this.provider.disable(session.simCardId);
+      case "suspend":
+        await this.provider.suspend(session.iccid);
         return;
       case "noop":
         return;

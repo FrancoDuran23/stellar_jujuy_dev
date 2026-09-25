@@ -1,5 +1,5 @@
 import type { MissionService } from './MissionService'
-import type { Mission, MissionState, UsageEvent, WizardData } from '../types/mission'
+import type { Mission, MissionState, PublicEsimInfo, UsageEvent, WizardData } from '../types/mission'
 
 const BASE_URL = '/api'
 const STORAGE_KEY = 'astroam:realMissionState'
@@ -22,7 +22,8 @@ export type Capabilities = {
   channelConfigured: boolean
   voucherAgentAvailable: boolean
   cosmoPayStatus: 'live' | 'mock' | 'unavailable'
-  telnyxStatus: 'live' | 'unavailable'
+  citrusStatus: 'live' | 'unavailable'
+  connectivityProvider: 'fake' | 'citrus'
   demoTrafficEnabled: boolean
   mode: 'live' | 'partial' | 'demo'
   liveEnabled: boolean
@@ -125,10 +126,10 @@ export class ApiMissionService implements MissionService {
     }
 
     const activeData = (await activateRes.json()) as {
-      channelId: string
-      simCardId: string
-      activationCode: string
-      depositTxHash?: string
+      missionId: string
+      status: string
+      isMock?: boolean
+      esim?: PublicEsimInfo
     }
 
     const mission: Mission = {
@@ -148,7 +149,10 @@ export class ApiMissionService implements MissionService {
       consumedMb: 0,
       esimStatus: 'active',
       network: 'stellar:testnet',
-      channelId: activeData.channelId,
+      channelId: `SOROBAN-${missionId}`,
+      iccid: activeData.esim?.iccid,
+      esim: activeData.esim,
+      isMock: activeData.isMock,
       createdAt: new Date().toISOString(),
     }
 
@@ -204,7 +208,6 @@ export class ApiMissionService implements MissionService {
       mission: updatedMission,
       events: [event, ...state.events],
     }
-
     this.saveToStorage(newState)
     return newState
   }
@@ -213,6 +216,7 @@ export class ApiMissionService implements MissionService {
     const { mission } = state
     if (!mission) return state
 
+    // Trigger async topup intent & confirmation
     void (async () => {
       try {
         const intentRes = await fetch(`${BASE_URL}/missions/${mission.id}/topups/payment-intent`, {
@@ -220,14 +224,14 @@ export class ApiMissionService implements MissionService {
           headers: getAuthHeaders(),
           body: JSON.stringify({ amountUsdc }),
         })
-        if (intentRes.ok) {
-          const intent = (await intentRes.json()) as { intentId: string }
-          await fetch(`${BASE_URL}/missions/${mission.id}/topups/payment-confirmation`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ intentId: intent.intentId, txHash: `0xtopup_${Date.now().toString(16)}` }),
-          })
-        }
+        if (!intentRes.ok) return
+        const intent = (await intentRes.json()) as { intentId: string }
+
+        await fetch(`${BASE_URL}/missions/${mission.id}/topups/payment-confirmation`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ intentId: intent.intentId, txHash: `0xtopup_${Date.now()}` }),
+        })
       } catch {
         // Fallback
       }
@@ -238,8 +242,8 @@ export class ApiMissionService implements MissionService {
       ...mission,
       balanceUsdc: newBalance,
       budgetUsdc: mission.budgetUsdc + amountUsdc,
-      status: 'active',
-      esimStatus: 'active',
+      status: mission.status === 'paused' && mission.esimStatus !== 'paused' ? 'active' : mission.status,
+      esimStatus: mission.esimStatus === 'disabled' ? 'active' : mission.esimStatus,
     }
 
     const topupEvent: UsageEvent = {
@@ -248,14 +252,13 @@ export class ApiMissionService implements MissionService {
       mb: 0,
       amountUsdc,
       status: 'liquidated',
-      txId: `real-topup-${Date.now().toString(16)}`,
+      txId: `real-tx-${Date.now().toString(16)}`,
     }
 
     const newState: MissionState = {
       mission: updatedMission,
       events: [topupEvent, ...state.events],
     }
-
     this.saveToStorage(newState)
     return newState
   }
@@ -276,6 +279,7 @@ export class ApiMissionService implements MissionService {
       ...mission,
       esimStatus: isPaused ? 'active' : 'paused',
       status: isPaused ? 'active' : 'paused',
+      esim: mission.esim ? { ...mission.esim, status: isPaused ? 'active' : 'suspended' } : undefined,
     }
 
     const newState: MissionState = { mission: updatedMission, events: state.events }
@@ -307,5 +311,3 @@ export class ApiMissionService implements MissionService {
     localStorage.removeItem(STORAGE_KEY)
   }
 }
-
-export const apiMissionService = new ApiMissionService()

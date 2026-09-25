@@ -5,10 +5,10 @@
  * All state lives in localStorage under STORAGE_KEY.
  * No network calls — safe to use without a running backend.
  *
- * Replace with a real adapter when /api/mission/* endpoints exist.
+ * Uses Citrus Mobile demo representations.
  */
 import type { MissionService } from './MissionService'
-import type { Mission, MissionState, UsageEvent, WizardData } from '../types/mission'
+import type { Mission, MissionState, PublicEsimInfo, UsageEvent, WizardData } from '../types/mission'
 import {
   randomHex,
   daysBetween,
@@ -42,6 +42,16 @@ export const demoMissionService: MissionService = {
   createMission(data: WizardData): Promise<Mission> {
     if (!data.destination) return Promise.reject(new Error('No destination selected'))
 
+    const iccid = `fake_${randomHex(4)}`
+    const mockEsim: PublicEsimInfo = {
+      iccid,
+      lpaString: `LPA:1$rsp.citrusmobile.demo$DEMO_${data.destination.id.toUpperCase()}_${Date.now()}`,
+      qrCode: `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect width="200" height="200" fill="%230F172A" rx="16"/><rect x="20" y="20" width="40" height="40" fill="%236941FF"/><rect x="140" y="20" width="40" height="40" fill="%236941FF"/><rect x="20" y="140" width="40" height="40" fill="%236941FF"/><rect x="80" y="80" width="40" height="40" fill="%2300F0FF"/><text x="100" y="180" fill="%2394A3B8" font-size="10" font-family="sans-serif" text-anchor="middle">CITRUS SIMULADO</text></svg>`,
+      directInstallUrl: `https://citrusmobile.com/install-demo?iccid=${iccid}`,
+      status: 'active',
+      isMock: true,
+    }
+
     const mission: Mission = {
       id: randomHex(16),
       origin: 'Argentina',
@@ -60,6 +70,9 @@ export const demoMissionService: MissionService = {
       esimStatus: 'active',
       network: STELLAR_NETWORK,
       channelId: `SOROBAN-MOCK-${randomHex(8).toUpperCase()}`,
+      iccid,
+      esim: mockEsim,
+      isMock: true,
       createdAt: new Date().toISOString(),
     }
 
@@ -155,6 +168,7 @@ export const demoMissionService: MissionService = {
       ...mission,
       esimStatus: isPaused ? 'active' : 'paused',
       status: isPaused ? 'active' : 'paused',
+      esim: mission.esim ? { ...mission.esim, status: isPaused ? 'active' : 'suspended' } : undefined,
     }
 
     const newState: MissionState = { mission: updatedMission, events }

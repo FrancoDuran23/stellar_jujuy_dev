@@ -54,6 +54,8 @@ export default function ActiveMissionPage() {
       : 'text-online'
 
   const statusLabel = isCompleted ? 'MISIÓN FINALIZADA' : isPaused ? 'DATOS PAUSADOS' : 'CONEXIÓN ACTIVA'
+  const providerLabel = mission.isMock !== false ? 'Citrus Mobile (Simulado)' : 'Citrus Mobile'
+  const iccidDisplay = mission.iccid || mission.esim?.iccid || 'iccid_unknown'
 
   return (
     <div className="min-h-screen bg-bglight relative overflow-x-hidden">
@@ -82,7 +84,7 @@ export default function ActiveMissionPage() {
           <div className="relative z-10 w-full max-w-sm max-h-[90vh] overflow-y-auto bg-white rounded-3xl border border-cardborder shadow-[0_20px_60px_rgba(25,24,29,0.12)] p-6 sm:p-7 flex flex-col gap-5">
             <h3 className="font-display text-xl font-bold text-textprimary">¿Finalizar misión?</h3>
             <p className="text-sm text-textsecondary leading-relaxed">
-              Tu eSIM se desactivará y se ejecutará el cierre del canal Soroban <strong>(Simulado)</strong>. El saldo no consumido quedará liberado.
+              Tu eSIM se desactivará y se ejecutará el cierre del canal Soroban. El saldo no consumido quedará liberado.
             </p>
             <div className="flex gap-3">
               <button
@@ -97,7 +99,7 @@ export default function ActiveMissionPage() {
                 onClick={handleComplete}
                 className="flex-1 py-3 rounded-full bg-alerta text-white font-sans font-bold text-xs uppercase tracking-wider hover:opacity-90 transition-all"
               >
-                FINALIZAR (SIMULADO)
+                FINALIZAR
               </button>
             </div>
           </div>
@@ -301,6 +303,40 @@ export default function ActiveMissionPage() {
               </div>
             )}
 
+            {/* Citrus eSIM Dedicated Card */}
+            <div className="bg-white rounded-2xl border border-cardborder shadow-sm p-5 sm:p-6 flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primaryviolet text-xl">sim_card</span>
+                  <span className="font-mono text-[11px] font-bold text-textprimary uppercase tracking-widest">CITRUS MOBILE eSIM</span>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full bg-online/10 text-online border border-online/20 font-mono text-[9px] font-bold uppercase">
+                  {mission.esimStatus}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-[10px] bg-bglight p-3.5 rounded-xl border border-cardborder">
+                <TechRow label="PROVEEDOR" value={providerLabel} />
+                <TechRow label="ICCID" value={iccidDisplay} />
+                <TechRow label="WALLET CITRUS" value={`${fmtUsdc(mission.balanceUsdc, 2)} USD`} />
+                <TechRow label="ESTADO PROVEEDOR" value={mission.esimStatus.toUpperCase()} />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <p className="font-sans text-xs text-textsecondary">
+                  Perfil de datos eSIM administrado vía wallet Soroban en tiempo real.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/mission/esim')}
+                  className="px-4 py-2 rounded-full border border-primaryviolet/30 bg-primaryviolet-light text-primaryviolet font-mono text-xs font-bold uppercase tracking-wider hover:bg-primaryviolet hover:text-white transition-all flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-sm">qr_code_2</span>
+                  VER INSTRUCCIONES DE INSTALACIÓN
+                </button>
+              </div>
+            </div>
+
             {/* Activity feed */}
             <div className="bg-white rounded-2xl border border-cardborder shadow-sm p-5 sm:p-6 flex flex-col gap-4">
               <div className="flex items-center justify-between">
@@ -323,10 +359,10 @@ export default function ActiveMissionPage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 font-mono text-[10px]">
                 <TechRow label="CANAL" value={mission.channelId} />
                 <TechRow label="RED" value="Stellar Testnet" />
-                <TechRow label="PROTOCOLO" value="MPP / Soroban (Mock)" />
+                <TechRow label="PROTOCOLO" value="MPP / Soroban" />
                 <TechRow label="eSIM" value={mission.esimStatus.toUpperCase()} />
-                <TechRow label="PROVEEDOR" value="Telnyx (Simulado)" />
-                <TechRow label="MODO" value="Simulación Frontend" />
+                <TechRow label="PROVEEDOR" value={providerLabel} />
+                <TechRow label="MODO" value={mission.isMock !== false ? 'Simulado' : 'Live'} />
               </div>
             </div>
 

@@ -79,8 +79,8 @@ export function computeChargeDeltaRaw(
 const BYTES_PER_MB = 1_000_000n;
 
 /**
- * Converts a price per decimal MB (the Telnyx policy's
- * `TELNYX_PRICE_PER_MB_USDC`, 1 MB = 1_000_000 bytes) into the agent's price
+ * Converts a price per decimal MB (the connectivity policy's
+ * `PRICE_PER_MB_RAW`, 1 MB = 1_000_000 bytes) into the agent's price
  * per MiB (`PRICE_PER_MIB_RAW`, 1 MiB = 1_048_576 bytes), rounding up. Both
  * sides must bill the same tariff or the agent and the policy disagree on
  * when the channel runs out.
