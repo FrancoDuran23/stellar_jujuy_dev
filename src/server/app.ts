@@ -13,6 +13,10 @@ import { createChannelVouchersRoute } from "./routes/channel.ts";
 import { createHealthRoute, createReadyRoute } from "./routes/health.ts";
 import { requireReady } from "./middleware/require-ready.ts";
 
+import { createProductRouter } from "../product/api/routes.ts";
+import { bootProductService } from "../product/runtime/product-boot.ts";
+import type { MissionProductService } from "../product/services/MissionProductService.ts";
+
 export type CreateServerAppOptions = {
   boot: FailClosedBoot<ChargePort>;
   network: string;
@@ -28,6 +32,7 @@ export type CreateServerAppOptions = {
    * state/error) once it goes ready. */
   channelBoot?: FailClosedBoot<ServerChannelInstance>;
   channel?: string;
+  productService?: MissionProductService;
 };
 
 /**
@@ -154,6 +159,9 @@ export function createServerApp(options: CreateServerAppOptions): Express {
   );
 
   app.get("/paid-resource", requireReady(options.boot), chargeRoute);
+
+  const productService = options.productService ?? bootProductService(process.env);
+  app.use("/api", createProductRouter(productService));
 
   // Last line of defense (review finding, Lote D): must be mounted after
   // every route so Express's error-handling dispatch (it recognizes an
