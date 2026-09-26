@@ -101,7 +101,7 @@ test("parseNonNegativeIntegerRaw rejects non-digit input, leading zeros, decimal
 test("pricePerMibFromPerMbRaw converts exact tariffs without rounding", () => {
   assert.equal(pricePerMibFromPerMbRaw(1_000_000n), 1_048_576n);
   assert.equal(pricePerMibFromPerMbRaw(10_000_000n), 10_485_760n);
-  assert.equal(pricePerMibFromPerMbRaw(125_000n), 131_072n); // Telnyx floor, 0.0125 USDC/MB
+  assert.equal(pricePerMibFromPerMbRaw(125_000n), 131_072n); // 0.0125 USDC/MB
 });
 
 test("pricePerMibFromPerMbRaw rounds a non-exact tariff up", () => {

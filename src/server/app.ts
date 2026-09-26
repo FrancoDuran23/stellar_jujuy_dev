@@ -12,6 +12,11 @@ import { createChargeRoute, type CumulativeBytesStore } from "./routes/charge.ts
 import { createChannelVouchersRoute } from "./routes/channel.ts";
 import { createHealthRoute, createReadyRoute } from "./routes/health.ts";
 import { requireReady } from "./middleware/require-ready.ts";
+import { createCitrusWebhooksRoute, type CitrusWebhooksRouteOptions } from "./routes/citrus-webhooks.ts";
+
+import { createProductRouter } from "../product/api/routes.ts";
+import { bootProductService } from "../product/runtime/product-boot.ts";
+import type { MissionProductService } from "../product/services/MissionProductService.ts";
 
 export type CreateServerAppOptions = {
   boot: FailClosedBoot<ChargePort>;
@@ -28,6 +33,13 @@ export type CreateServerAppOptions = {
    * state/error) once it goes ready. */
   channelBoot?: FailClosedBoot<ServerChannelInstance>;
   channel?: string;
+  productService?: MissionProductService;
+  /** Citrus webhooks (docs/citrus-mobile-spec.md v2 §7 R10) — mounted only
+   * when `CONNECTIVITY_PROVIDER=citrus` and `CITRUS_WEBHOOK_SECRET` are set
+   * (see `server/main.ts`). The route registers its own `express.raw`
+   * parser BEFORE the app-wide `express.json()`, so it always sees the raw
+   * body for the HMAC and the rest of the app is unaffected. */
+  citrusWebhooks?: CitrusWebhooksRouteOptions;
 };
 
 /**
@@ -77,6 +89,17 @@ const jsonErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
 export function createServerApp(options: CreateServerAppOptions): Express {
   const app = express();
   app.disable("x-powered-by");
+  // R10: the webhook route's raw body parser must come BEFORE the app-wide
+  // express.json(). Mounted here, `express.raw({ type: "application/json" })`
+  // applies ONLY to POST /citrus/webhooks (per-route middleware), so the rest
+  // of the app keeps its normal JSON parsing with zero interference.
+  if (options.citrusWebhooks !== undefined) {
+    app.post(
+      "/citrus/webhooks",
+      express.raw({ type: "application/json" }),
+      createCitrusWebhooksRoute(options.citrusWebhooks),
+    );
+  }
   app.use(express.json());
 
   // FC-R6: /health and /ready are never behind requireReady.
@@ -154,6 +177,9 @@ export function createServerApp(options: CreateServerAppOptions): Express {
   );
 
   app.get("/paid-resource", requireReady(options.boot), chargeRoute);
+
+  const productService = options.productService ?? bootProductService(process.env);
+  app.use("/api", createProductRouter(productService));
 
   // Last line of defense (review finding, Lote D): must be mounted after
   // every route so Express's error-handling dispatch (it recognizes an

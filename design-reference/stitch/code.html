@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+
+<html class="scroll-smooth" lang="es"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>ASTROAM — Roaming Inteligente</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=Space+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            bglight: "#FAF9F7",
+            cardbg: "#FFFFFF",
+            warmneutral: "#F4F2F1",
+            cardborder: "#E8E5E4",
+            textprimary: "#19181D",
+            textsecondary: "#5F5C68",
+            primaryviolet: {
+              DEFAULT: "#6941FF",
+              hover: "#5A32F4",
+              light: "#EEE9FF",
+              dim: "rgba(105, 65, 255, 0.08)"
+            },
+            stellar: "#FDDA24",
+            tealbrand: "#008C99",
+            cyanlight: "#E5F7F8",
+            online: "#31C48D",
+            alerta: "#E85D5D"
+          },
+          fontFamily: {
+            sans: ["Inter", "sans-serif"],
+            display: ["Space Grotesk", "sans-serif"],
+            mono: ["Space Mono", "monospace"]
+          }
+        }
+      }
+    };
+  </script>
+<style>
+    @keyframes floatShip {
+      0%, 100% { transform: translateY(0px) rotate(0deg); }
+      50% { transform: translateY(-12px) rotate(1.5deg); }
+    }
+    @keyframes slowDriftA {
+      0%, 100% { transform: translate(0, 0) rotate(0deg); }
+      50% { transform: translate(-10px, 12px) rotate(16deg); }
+    }
+    @keyframes slowDriftB {
+      0%, 100% { transform: translate(0, 0) rotate(0deg); }
+      50% { transform: translate(10px, -10px) rotate(-14deg); }
+    }
+    @keyframes pulseBeam {
+      0% { stroke-dashoffset: 400; }
+      100% { stroke-dashoffset: 0; }
+    }
+    @keyframes portalSpin {
+      0% { transform: rotate(0deg) scale(1); }
+      50% { transform: rotate(180deg) scale(1.04); }
+      100% { transform: rotate(360deg) scale(1); }
+    }
+    .animate-float-ship {
+      animation: floatShip 5s ease-in-out infinite;
+    }
+    .animate-drift-a {
+      animation: slowDriftA 16s ease-in-out infinite;
+    }
+    .animate-drift-b {
+      animation: slowDriftB 20s ease-in-out infinite;
+    }
+    .animate-portal {
+      animation: portalSpin 24s linear infinite;
+    }
+    .group-launch:hover .launch-thrust {
+      transform: translateY(-8px) scale(1.03);
+      filter: drop-shadow(0 12px 28px rgba(105, 65, 255, 0.35));
+    }
+    .fintech-grid {
+      background-size: 48px 48px;
+      background-image:
+        linear-gradient(to right, rgba(105, 65, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(105, 65, 255, 0.035) 1px, transparent 1px);
+    }
+  </style>
+</head>
+<body class="bg-[#FAF9F7] text-textprimary font-sans antialiased overflow-x-hidden selection:bg-primaryviolet/20 selection:text-primaryviolet">
+<!-- BACKGROUND GRID SUTIL -->
+<div class="fixed inset-0 pointer-events-none fintech-grid z-0 opacity-70"></div>
+<!-- NAVEGACIÓN SUPERIOR LIMPIA ESTILO FINTECH MODERNO -->
+<header class="fixed top-0 left-0 w-full z-50 bg-white/90 backdrop-blur-md border-b border-gray-200/80 transition-all">
+<div class="max-w-7xl mx-auto h-20 px-6 md:px-12 flex items-center justify-between">
+<!-- Logo Oficial ASTROAM -->
+<a class="flex items-center gap-3.5 group" href="#">
+<img alt="ASTROAM" class="h-8 sm:h-9 object-contain transition-transform duration-200 group-hover:scale-105" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAsNO-4C7EfA1fIo4xJvxK44G5uH054x9kCH7Z56UJwjy0-W0mhl2uVjAu9TdHjdU8d8LHpgFPn7kamS38Mq36hSYR8sCf4t_SZ_mr1gP1d-WeZDjaKWXcwb1CX5GdWzEP2qsQhjQ46PaaUvMOZzfNHLWHk9nihBKe9sukZYM1lGIRwoWbCtWFS-GXUMg9eqlBPqSLs8Nb8BbxJ2B8oysjsdHRSOfnjE4Ui1Xa7-BsLpscXZ2mpyzqQJvFtoiHIylvYZw"/>
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#EEE9FF] border border-primaryviolet/20 text-[11px] font-mono font-semibold text-primaryviolet tracking-wider">
+<span class="w-1.5 h-1.5 rounded-full bg-primaryviolet animate-pulse"></span>
+    TESTNET LIVE
+  </span>
+</a>
+<!-- Enlaces Claros -->
+<nav class="hidden md:flex items-center gap-8">
+<a class="text-sm font-medium text-textsecondary hover:text-primaryviolet transition-colors" href="#como-funciona">Cómo funciona</a>
+<a class="text-sm font-medium text-textsecondary hover:text-primaryviolet transition-colors" href="#tecnologia">Tecnología</a>
+<a class="text-sm font-medium text-textsecondary hover:text-primaryviolet transition-colors" href="#cabina">Demo en vivo</a>
+</nav>
+<!-- Botón Destacado Pill Violeta -->
+<div class="flex items-center">
+<a class="px-6 py-2.5 rounded-full bg-primaryviolet text-white font-sans font-semibold text-xs tracking-wider uppercase hover:bg-primaryviolet-hover shadow-[0_4px_14px_rgba(105,65,255,0.35)] hover:shadow-[0_6px_20px_rgba(105,65,255,0.45)] hover:-translate-y-0.5 transition-all duration-200 flex items-center gap-2" href="#portal">
+<span>INICIAR MISIÓN</span>
+<span class="material-symbols-outlined text-sm">rocket_launch</span>
+</a>
+</div>
+</div>
+</header>
+<main class="relative z-10 pt-20">
+<!-- HERO SECTION FINTECH CLARO & MODERNO -->
+<section class="relative min-h-[90vh] flex items-center px-6 md:px-12 py-12 md:py-20 overflow-hidden">
+<!-- Glow ambiental sutil y luminoso -->
+<div class="absolute top-1/4 -left-20 w-96 h-96 bg-primaryviolet/10 rounded-full blur-[120px] pointer-events-none"></div>
+<div class="absolute top-1/3 right-10 w-[450px] h-[450px] bg-tealbrand/10 rounded-full blur-[140px] pointer-events-none"></div>
+<div class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-10 items-center">
+<!-- Columna Izquierda: Mensaje Central Monumental -->
+<div class="lg:col-span-6 flex flex-col items-start gap-6">
+<!-- Tag Elegante Pill -->
+<div class="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-white border border-cardborder shadow-sm">
+<span class="w-2 h-2 rounded-full bg-tealbrand animate-pulse"></span>
+<span class="font-mono text-xs font-semibold text-tealbrand tracking-wider uppercase">ROAMING INTELIGENTE · POWERED BY STELLAR</span>
+</div>
+<!-- Título Monumental -->
+<h1 class="font-display text-5xl sm:text-6xl md:text-7xl font-bold tracking-tight text-textprimary leading-tight">
+    TU CONEXIÓN.<br/>
+<span class="text-transparent bg-clip-text bg-gradient-to-r from-primaryviolet via-[#7C58FF] to-tealbrand">TU MISIÓN.</span>
+</h1>
+<!-- Descripción Limpia -->
+<p class="text-lg md:text-xl text-textsecondary max-w-xl font-normal leading-relaxed">
+    Viajá conectado y pagá únicamente por los datos que realmente consumís. Sin contratos rígidos ni paquetes inflados. Tu conexión fluye con la velocidad y economía de la red Stellar.
+  </p>
+<!-- Botones Pill Amplios -->
+<div class="flex flex-wrap items-center gap-4 pt-1 group-launch">
+<a class="px-8 py-3.5 rounded-full bg-primaryviolet text-white font-sans font-semibold text-sm uppercase tracking-wider shadow-[0_4px_16px_rgba(105,65,255,0.35)] hover:bg-primaryviolet-hover hover:shadow-[0_8px_24px_rgba(105,65,255,0.5)] transition-all transform hover:-translate-y-0.5 flex items-center gap-2.5" href="#portal">
+<span>INICIAR MISIÓN</span>
+<span class="material-symbols-outlined text-base">rocket_launch</span>
+</a>
+<a class="px-7 py-3.5 rounded-full border border-cardborder bg-white text-textprimary font-sans font-semibold text-sm uppercase tracking-wider hover:bg-[#EEE9FF] hover:border-primaryviolet/40 hover:text-primaryviolet shadow-sm hover:shadow transition-all duration-200" href="#como-funciona">
+      VER CÓMO FUNCIONA
+    </a>
+</div>
+<!-- 3 Indicadores Limpios en Tarjetas Blancas -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-6 w-full mt-2">
+<div class="flex flex-col gap-1 p-4 rounded-2xl bg-white border border-cardborder shadow-sm">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primaryviolet"></span>
+<span class="font-mono text-[11px] font-bold text-primaryviolet tracking-wider uppercase">01 // TARIFA</span>
+</div>
+<span class="font-display text-base font-bold text-textprimary mt-1">Pago por consumo</span>
+<span class="text-xs text-textsecondary">Fraccionado por cada MB</span>
+</div>
+<div class="flex flex-col gap-1 p-4 rounded-2xl bg-white border border-cardborder shadow-sm">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-tealbrand"></span>
+<span class="font-mono text-[11px] font-bold text-tealbrand tracking-wider uppercase">02 // CONTROL</span>
+</div>
+<span class="font-display text-base font-bold text-textprimary mt-1">Límite automático</span>
+<span class="text-xs text-textsecondary">Sin sorpresas en la factura</span>
+</div>
+<div class="flex flex-col gap-1 p-4 rounded-2xl bg-white border border-cardborder shadow-sm">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-stellar"></span>
+<span class="font-mono text-[11px] font-bold text-textprimary tracking-wider uppercase">03 // CUSTODIA</span>
+</div>
+<span class="font-display text-base font-bold text-textprimary mt-1">Saldo reutilizable</span>
+<span class="text-xs text-textsecondary">Nunca vence en tu wallet</span>
+</div>
+</div>
+</div>
+<!-- Columna Derecha: Tarjeta Flotante Fintech con Escena de Navegación -->
+<div class="lg:col-span-6 relative flex items-center justify-center">
+<div class="w-full max-w-xl bg-white rounded-3xl border border-cardborder shadow-[0_16px_40px_rgba(25,24,29,0.08)] p-6 sm:p-8 relative overflow-hidden">
+<!-- Header de la tarjeta estilo fintech (como Imagen 3) -->
+<div class="flex items-center justify-between pb-5 border-b border-gray-100">
+<div class="flex items-center gap-2.5">
+<span class="w-2.5 h-2.5 rounded-full bg-online animate-pulse"></span>
+<span class="font-mono text-xs font-bold text-textprimary uppercase tracking-wider">CONEXIÓN LISTA</span>
+</div>
+<span class="px-3 py-1 rounded-full bg-[#EEE9FF] text-primaryviolet font-mono text-[11px] font-semibold tracking-wide">
+        Liquidación en Stellar
+      </span>
+</div>
+<!-- Escena Vectorial Argentina -> Brasil sobre fondo suave -->
+<div class="relative min-h-[300px] w-full rounded-2xl bg-[#FAF8FE] border border-primaryviolet/10 my-5 overflow-hidden flex items-center justify-center">
+<!-- Fondo Vectorial de Ruta Orbital -->
+<svg class="absolute inset-0 w-full h-full pointer-events-none" fill="none" viewbox="0 0 500 300">
+<!-- Asteroides sutiles con estética geométrica clara -->
+<polygon class="animate-drift-a" fill="#F4F0FF" opacity="0.8" points="60,40 85,25 105,50 90,75 60,65" stroke="#C9BEFF" stroke-width="1.2"></polygon>
+<polygon class="animate-drift-b" fill="#EBF9FB" opacity="0.9" points="410,220 440,205 455,235 435,265 400,250" stroke="#89EFFD" stroke-width="1.2"></polygon>
+<!-- Curva Orbital Argentina -> Brasil -->
+<path d="M 80 230 Q 230 70 420 80" opacity="0.65" stroke="#6941FF" stroke-dasharray="6 5" stroke-linecap="round" stroke-width="2.5"></path>
+<!-- Pulso animado sobre la trayectoria -->
+<path d="M 80 230 Q 230 70 420 80" stroke="#FDDA24" stroke-dasharray="25 180" stroke-linecap="round" stroke-width="3" style="animation: pulseBeam 4s linear infinite;"></path>
+<!-- Checkpoints Luminosos -->
+<circle cx="80" cy="230" fill="#6941FF" r="6"></circle>
+<circle cx="80" cy="230" opacity="0.3" r="14" stroke="#6941FF" stroke-width="1.5"></circle>
+<circle cx="215" cy="135" fill="#FDDA24" r="5"></circle>
+<circle class="animate-spin" cx="215" cy="135" r="12" stroke="#FDDA24" stroke-dasharray="3 3" stroke-width="1.5"></circle>
+<circle cx="330" cy="92" fill="#008C99" r="5"></circle>
+<!-- Planeta Brasil -->
+<g transform="translate(420, 80)">
+<ellipse cx="0" cy="0" rx="42" ry="14" stroke="#008C99" stroke-dasharray="4 3" stroke-width="1.2" transform="rotate(-18)"></ellipse>
+<circle cx="0" cy="0" fill="#FFFFFF" r="20" stroke="#008C99" stroke-width="2"></circle>
+<circle cx="-3" cy="-4" fill="#E5F7F8" r="12"></circle>
+<text fill="#008C99" font-family="'Space Mono', monospace" font-size="9" font-weight="bold" letter-spacing="1" text-anchor="middle" x="0" y="32">BRASIL [GIG]</text>
+</g>
+<!-- Base Argentina -->
+<g transform="translate(80, 230)">
+<text fill="#6941FF" font-family="'Space Mono', monospace" font-size="9" font-weight="bold" letter-spacing="1" text-anchor="middle" x="0" y="24">ARGENTINA [EZE]</text>
+</g>
+</svg>
+<!-- Nave ASTROAM (Isotipo Oficial) Flotando sobre la ruta -->
+<div class="absolute left-[44%] top-[38%] -translate-x-1/2 -translate-y-1/2 z-20 flex flex-col items-center">
+<!-- Glow y contenedor -->
+<div class="w-24 h-24 relative animate-float-ship launch-thrust transition-all duration-300 cursor-pointer">
+<img alt="Nave ASTROAM" class="w-full h-full object-contain drop-shadow-[0_8px_18px_rgba(105,65,255,0.4)]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCRMGu7mn44Y2ZKq6EC7fX7pasEodpkJ84smxngVlPHS8dKBIthFimMSD-C8x35G6pmJoxo8aoa7wt7XTTDLqngFnpM7ssOf1ldItNpzNKyGOYzgiy5EAAmzTgAJmg-r0rjB6cRZjAbrT4h6PHarcQdbL8U_yg1G1_0__QVO-3hfSYXWny5neg-WDFqgNi6Bb8zIF7BUbjLRhGxEMcf6rm4qIFEzYQakPyb8vg64g25GlhOpaet-Ju0rKFMd5WwxAcfrA"/>
+<!-- Pulso de micropago emitido -->
+<div class="absolute -top-2 -right-2 px-2 py-0.5 rounded-full bg-stellar text-textprimary font-mono font-bold text-[10px] tracking-wider shadow-md animate-bounce border border-yellow-400/50">
+            +1 MB
+          </div>
+</div>
+</div>
+</div>
+<!-- HUD Telemetría Limpio & Claro -->
+<div class="grid grid-cols-2 gap-3 pt-2">
+<div class="p-3.5 rounded-2xl bg-[#FAF9F7] border border-cardborder">
+<div class="flex items-center gap-1.5 text-textsecondary font-mono text-[11px] uppercase font-semibold">
+<span class="material-symbols-outlined text-sm text-primaryviolet">account_balance_wallet</span>
+          COMBUSTIBLE
+        </div>
+<div class="font-display text-2xl font-bold text-textprimary mt-1">
+          5,00 <span class="text-xs font-mono font-normal text-textsecondary">USDC</span>
+</div>
+</div>
+<div class="p-3.5 rounded-2xl bg-[#FAF9F7] border border-cardborder">
+<div class="flex items-center gap-1.5 text-textsecondary font-mono text-[11px] uppercase font-semibold">
+<span class="material-symbols-outlined text-sm text-tealbrand">wifi_tethering</span>
+          CONSUMO
+        </div>
+<div class="font-display text-2xl font-bold text-textprimary mt-1">
+          0,0 <span class="text-xs font-mono font-normal text-textsecondary">/ 5 MB</span>
+</div>
+</div>
+</div>
+<div class="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between text-xs">
+<span class="font-mono text-textsecondary uppercase tracking-wider">DESTINO FIJADO</span>
+<span class="font-sans font-bold text-primaryviolet">BRASIL ORBITAL (4G/5G)</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ESCENA 2: EL ROAMING TRADICIONAL CONSUME MÁS DE LO QUE NECESITÁS -->
+<section class="relative py-24 px-6 md:px-12 bg-white border-y border-cardborder overflow-hidden">
+<div class="max-w-7xl mx-auto flex flex-col gap-14">
+<!-- Título de Sección -->
+<div class="max-w-3xl flex flex-col gap-3">
+<div class="inline-flex items-center gap-2 font-mono text-xs font-bold text-alerta tracking-widest uppercase">
+<span class="material-symbols-outlined text-sm">warning</span>
+    ZONA DE ANOMALÍAS DETECTADA
+  </div>
+<h2 class="font-display text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-textprimary leading-tight">
+    EL ROAMING TRADICIONAL CONSUME MÁS DE LO QUE NECESITÁS.
+  </h2>
+<p class="text-base sm:text-lg text-textsecondary leading-relaxed">
+    Las operadoras antiguas te obligan a comprar paquetes cerrados y rígidos. La nave ASTROAM sortea los asteroides del modelo obsoleto con vuelo ágil y micropagos autónomos.
+  </p>
+</div>
+<!-- 3 Obstáculos en Tarjetas Blancas con sombras limpias -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
+<!-- Asteroide 1: Paquetes Demasiado Largos -->
+<div class="flex flex-col justify-between p-8 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-primaryviolet/50 hover:shadow-md transition-all group">
+<div class="flex flex-col gap-4">
+<div class="w-14 h-14 rounded-2xl bg-white border border-cardborder flex items-center justify-center text-primaryviolet shadow-sm">
+<span class="material-symbols-outlined text-2xl group-hover:rotate-12 transition-transform">event_busy</span>
+</div>
+<div class="flex flex-col gap-2">
+<span class="font-mono text-xs font-bold text-textsecondary tracking-wider">OBSTÁCULO 01</span>
+<h3 class="font-display text-xl font-bold text-textprimary group-hover:text-primaryviolet transition-colors">
+          PAQUETES DEMASIADO LARGOS
+        </h3>
+<p class="text-sm text-textsecondary leading-relaxed">
+          Te cobran 7, 15 o 30 días obligatorios cuando tu viaje dura un fin de semana o una escala de horas.
+        </p>
+</div>
+</div>
+<div class="pt-6 mt-6 border-t border-cardborder font-mono text-xs text-alerta font-medium flex items-center gap-1.5">
+<span class="material-symbols-outlined text-base">close</span>
+      Pérdida por inmovilización
+    </div>
+</div>
+<!-- Asteroide 2: Datos que no usás -->
+<div class="flex flex-col justify-between p-8 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-primaryviolet/50 hover:shadow-md transition-all group">
+<div class="flex flex-col gap-4">
+<div class="w-14 h-14 rounded-2xl bg-white border border-cardborder flex items-center justify-center text-primaryviolet shadow-sm">
+<span class="material-symbols-outlined text-2xl group-hover:-rotate-12 transition-transform">cloud_off</span>
+</div>
+<div class="flex flex-col gap-2">
+<span class="font-mono text-xs font-bold text-textsecondary tracking-wider">OBSTÁCULO 02</span>
+<h3 class="font-display text-xl font-bold text-textprimary group-hover:text-primaryviolet transition-colors">
+          DATOS QUE NO UTILIZÁS
+        </h3>
+<p class="text-sm text-textsecondary leading-relaxed">
+          Comprás 10 GB, consumís 2 GB y el remanente se esfuma al cumplirse el plazo. Tu dinero nunca regresa.
+        </p>
+</div>
+</div>
+<div class="pt-6 mt-6 border-t border-cardborder font-mono text-xs text-alerta font-medium flex items-center gap-1.5">
+<span class="material-symbols-outlined text-base">close</span>
+      Saldo confiscado
+    </div>
+</div>
+<!-- Asteroide 3: Gastos sin control -->
+<div class="flex flex-col justify-between p-8 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-primaryviolet/50 hover:shadow-md transition-all group">
+<div class="flex flex-col gap-4">
+<div class="w-14 h-14 rounded-2xl bg-white border border-cardborder flex items-center justify-center text-primaryviolet shadow-sm">
+<span class="material-symbols-outlined text-2xl group-hover:scale-110 transition-transform">receipt_long</span>
+</div>
+<div class="flex flex-col gap-2">
+<span class="font-mono text-xs font-bold text-textsecondary tracking-wider">OBSTÁCULO 03</span>
+<h3 class="font-display text-xl font-bold text-textprimary group-hover:text-primaryviolet transition-colors">
+          GASTOS SIN CONTROL
+        </h3>
+<p class="text-sm text-textsecondary leading-relaxed">
+          Consumos en segundo plano generan cargos sorpresa abusivos que recién descubrís en el resumen de fin de mes.
+        </p>
+</div>
+</div>
+<div class="pt-6 mt-6 border-t border-cardborder font-mono text-xs text-alerta font-medium flex items-center gap-1.5">
+<span class="material-symbols-outlined text-base">close</span>
+      Facturas sorpresa
+    </div>
+</div>
+</div>
+</div>
+</section>
+<!-- ESCENA 3: CÓMO FUNCIONA — RUTA ESPACIAL DE 4 ESTACIONES -->
+<section class="relative py-24 px-6 md:px-12 bg-[#FAF9F7] overflow-hidden" id="como-funciona">
+<div class="max-w-7xl mx-auto flex flex-col gap-16">
+<!-- Encabezado -->
+<div class="flex flex-col items-center text-center gap-3 max-w-3xl mx-auto">
+<div class="inline-flex items-center gap-2 font-mono text-xs font-bold text-primaryviolet tracking-widest uppercase">
+    [ SECUENCIA DE LANZAMIENTO // 4 CHECKPOINTS ]
+  </div>
+<h2 class="font-display text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-textprimary">
+    CÓMO FUNCIONA
+  </h2>
+<p class="text-base sm:text-lg text-textsecondary">
+    Un recorrido continuo de 4 niveles que activa tu conectividad en segundos sobre la infraestructura descentralizada de Stellar.
+  </p>
+</div>
+<!-- 4 Estaciones en Tarjetas Blancas Refinadas -->
+<div class="relative grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+<!-- Estación 1: Elegí tu destino -->
+<div class="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-primaryviolet/40 hover:shadow-md transition-all group">
+<div class="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
+<svg class="w-28 h-28" fill="none" viewbox="0 0 120 120">
+<circle cx="60" cy="60" opacity="0.4" r="45" stroke="#6941FF" stroke-dasharray="3 3" stroke-width="1.2"></circle>
+<circle cx="60" cy="60" fill="#FFFFFF" r="26" stroke="#6941FF" stroke-width="1.5"></circle>
+<line opacity="0.3" stroke="#6941FF" stroke-dasharray="2 2" stroke-width="0.8" x1="60" x2="60" y1="15" y2="105"></line>
+<line opacity="0.3" stroke="#6941FF" stroke-dasharray="2 2" stroke-width="0.8" x1="15" x2="105" y1="60" y2="60"></line>
+<circle class="animate-ping" cx="76" cy="46" fill="#008C99" r="4"></circle>
+<circle cx="76" cy="46" fill="#008C99" r="3"></circle>
+</svg>
+<span class="absolute bottom-2 left-3 font-mono text-[9px] font-semibold text-primaryviolet tracking-widest">[ COORD: -23.55 // -46.63 ]</span>
+</div>
+<div class="flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-mono text-xs font-bold text-primaryviolet">NIVEL 01</span>
+<span class="w-2 h-2 rounded-full bg-primaryviolet"></span>
+</div>
+<h3 class="font-display text-lg font-bold text-textprimary">ELEGÍ TU DESTINO</h3>
+<p class="text-xs text-textsecondary leading-relaxed">
+        Seleccioná el país al que viajás y conocé la tarifa exacta por megabyte. Sin tarifas ocultas ni contratos.
+      </p>
+</div>
+</div>
+<!-- Estación 2: Cargá combustible -->
+<div class="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-tealbrand/40 hover:shadow-md transition-all group">
+<div class="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
+<svg class="w-28 h-28" fill="none" viewbox="0 0 120 120">
+<rect fill="#FFFFFF" height="66" rx="16" stroke="#008C99" stroke-width="1.8" width="34" x="43" y="27"></rect>
+<rect fill="#008C99" fill-opacity="0.2" height="36" rx="10" width="26" x="47" y="53"></rect>
+<line stroke="#008C99" stroke-linecap="round" stroke-width="1.5" x1="49" x2="71" y1="49" y2="49"></line>
+<circle cx="60" cy="71" fill="#FFFFFF" r="7" stroke="#008C99" stroke-width="1.2"></circle>
+<text fill="#008C99" font-family="'Space Mono', monospace" font-size="9" font-weight="bold" text-anchor="middle" x="60" y="75">$</text>
+</svg>
+<span class="absolute bottom-2 left-3 font-mono text-[9px] font-semibold text-tealbrand tracking-widest">[ SALDO SEGURO: USDC ]</span>
+</div>
+<div class="flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-mono text-xs font-bold text-tealbrand">NIVEL 02</span>
+<span class="w-2 h-2 rounded-full bg-tealbrand"></span>
+</div>
+<h3 class="font-display text-lg font-bold text-textprimary">CARGÁ COMBUSTIBLE</h3>
+<p class="text-xs text-textsecondary leading-relaxed">
+        Depositá saldo en USDC. Tu dinero permanece seguro bajo tu custodia en la red Stellar y nunca vence.
+      </p>
+</div>
+</div>
+<!-- Estación 3: Activá tu eSIM -->
+<div class="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-online/40 hover:shadow-md transition-all group">
+<div class="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
+<svg class="w-28 h-28" fill="none" viewbox="0 0 120 120">
+<rect fill="#FFFFFF" height="22" rx="3" stroke="#6941FF" stroke-width="1.5" width="16" x="52" y="38"></rect>
+<rect fill="#EEE9FF" height="12" stroke="#6941FF" stroke-width="1.2" width="22" x="24" y="43"></rect>
+<rect fill="#EEE9FF" height="12" stroke="#6941FF" stroke-width="1.2" width="22" x="74" y="43"></rect>
+<path d="M 44 74 A 18 18 0 0 0 76 74" stroke="#31C48D" stroke-dasharray="3 3" stroke-width="1.5"></path>
+<path d="M 36 84 A 28 28 0 0 0 84 84" opacity="0.7" stroke="#31C48D" stroke-dasharray="3 3" stroke-width="1.5"></path>
+<circle cx="60" cy="96" fill="#31C48D" r="3.5"></circle>
+</svg>
+<span class="absolute bottom-2 left-3 font-mono text-[9px] font-semibold text-online tracking-widest">[ TELNYX eSIM LINK ]</span>
+</div>
+<div class="flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-mono text-xs font-bold text-online">NIVEL 03</span>
+<span class="w-2 h-2 rounded-full bg-online"></span>
+</div>
+<h3 class="font-display text-lg font-bold text-textprimary">ACTIVÁ TU eSIM</h3>
+<p class="text-xs text-textsecondary leading-relaxed">
+        Escaneá el código QR en segundos. Tu enlace satelital queda listo para encenderse antes de aterrizar.
+      </p>
+</div>
+</div>
+<!-- Estación 4: Pagá por consumo -->
+<div class="flex flex-col gap-5 p-6 rounded-2xl bg-white border border-cardborder hover:border-primaryviolet/40 hover:shadow-md transition-all group">
+<div class="h-40 w-full rounded-xl bg-[#FAF8FE] flex items-center justify-center relative overflow-hidden border border-primaryviolet/10">
+<svg class="w-28 h-28" fill="none" viewbox="0 0 120 120">
+<ellipse cx="60" cy="60" rx="42" ry="18" stroke="#6941FF" stroke-width="1.2" transform="rotate(-15 60 60)"></ellipse>
+<ellipse cx="60" cy="60" rx="42" ry="18" stroke="#008C99" stroke-dasharray="3 3" stroke-width="1.2" transform="rotate(35 60 60)"></ellipse>
+<circle cx="60" cy="60" fill="#FFFFFF" r="10" stroke="#6941FF" stroke-width="1.5"></circle>
+<circle cx="60" cy="60" fill="#6941FF" r="4"></circle>
+<circle class="animate-pulse" cx="90" cy="52" fill="#FDDA24" r="3.5"></circle>
+<circle cx="32" cy="72" fill="#FDDA24" r="3"></circle>
+<circle cx="50" cy="40" fill="#008C99" r="3"></circle>
+</svg>
+<span class="absolute bottom-2 left-3 font-mono text-[9px] font-semibold text-primaryviolet tracking-widest">[ MICROPAGOS EN VIVO ]</span>
+</div>
+<div class="flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-mono text-xs font-bold text-primaryviolet">NIVEL 04</span>
+<span class="w-2 h-2 rounded-full bg-primaryviolet"></span>
+</div>
+<h3 class="font-display text-lg font-bold text-textprimary">PAGÁ POR CONSUMO</h3>
+<p class="text-xs text-textsecondary leading-relaxed">
+        Navegá sin fricción. Cada bloque de megabytes se liquida automáticamente. Lo que no usás, no lo pagás.
+      </p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ESCENA 4: VENTANA A LA CABINA DE MISIÓN -->
+<section class="relative py-24 px-6 md:px-12 bg-white border-t border-cardborder overflow-hidden" id="cabina">
+<div class="max-w-6xl mx-auto flex flex-col gap-12">
+<div class="flex flex-col items-center text-center gap-2">
+<span class="font-mono text-xs font-bold text-primaryviolet uppercase tracking-widest">[ CABINA DE NAVEGACIÓN EN TIEMPO REAL ]</span>
+<h2 class="font-display text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-textprimary">
+    VENTANA A LA CABINA DE MISIÓN
+  </h2>
+<p class="text-base text-textsecondary max-w-xl">
+    Monitoreo cristalino de tu enlace de datos sin terminales abarrotadas ni códigos indescifrables.
+  </p>
+</div>
+<!-- Panel Panorámico Blanco Elegante -->
+<div class="relative rounded-3xl bg-[#FAF9F7] border border-cardborder shadow-[0_12px_36px_rgba(25,24,29,0.06)] overflow-hidden">
+<!-- Marco Superior -->
+<div class="px-8 py-4 border-b border-cardborder flex flex-wrap items-center justify-between gap-4 bg-white">
+<div class="flex items-center gap-2.5">
+<span class="w-2.5 h-2.5 rounded-full bg-online animate-pulse"></span>
+<span class="font-mono text-xs font-bold text-textprimary uppercase tracking-wider">
+        ESTADO eSIM: <strong class="text-online font-bold">CONEXIÓN ACTIVA</strong>
+</span>
+</div>
+<div class="flex items-center gap-6 font-mono text-xs text-textsecondary">
+<span>CANAL: SOROBAN-04</span>
+<span>DESTINO: BRASIL [GIG]</span>
+</div>
+</div>
+<!-- Interior: Gráfico y Telemetría -->
+<div class="p-8 md:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+<!-- Columna Izquierda: Gráfico Panorámico de Arco Vectorial -->
+<div class="lg:col-span-7 flex flex-col gap-5">
+<div class="relative h-60 w-full bg-white rounded-2xl border border-cardborder p-6 flex flex-col justify-between overflow-hidden shadow-sm">
+<svg class="absolute inset-0 w-full h-full pointer-events-none" fill="none" viewbox="0 0 450 200">
+<circle cx="225" cy="180" r="150" stroke="#F4F2F1" stroke-width="1.5"></circle>
+<!-- Arco de base gris suave -->
+<path d="M 75 180 A 150 150 0 0 1 375 180" stroke="#EEE9FF" stroke-linecap="round" stroke-width="10"></path>
+<!-- Arco de progreso violeta -->
+<path d="M 75 180 A 150 150 0 0 1 190 35" stroke="url(#arcLightGradient)" stroke-linecap="round" stroke-width="10"></path>
+<!-- Punto nave -->
+<circle class="animate-ping" cx="190" cy="35" fill="#6941FF" r="6"></circle>
+<circle cx="190" cy="35" fill="#FDDA24" r="5"></circle>
+<defs>
+<lineargradient gradientunits="userSpaceOnUse" id="arcLightGradient" x1="75" x2="190" y1="180" y2="35">
+<stop stop-color="#6941FF"></stop>
+<stop offset="1" stop-color="#008C99"></stop>
+</lineargradient>
+</defs>
+</svg>
+<div class="relative z-10 flex items-center justify-between">
+<span class="font-mono text-xs font-bold text-primaryviolet tracking-wider">TRAYECTORIA EN CURSO</span>
+<span class="font-mono text-xs font-bold text-tealbrand">40% CONSUMIDO</span>
+</div>
+<div class="relative z-10 flex items-end justify-between pt-10">
+<div>
+<span class="font-mono text-[10px] font-semibold text-textsecondary block uppercase">DATOS CONSUMIDOS</span>
+<span class="font-display text-3xl font-bold text-textprimary">2,0 <span class="text-sm font-normal text-textsecondary">/ 5,0 MB</span></span>
+</div>
+<div class="text-right">
+<span class="font-mono text-[10px] font-semibold text-textsecondary block uppercase">MARGEN RESTANTE</span>
+<span class="font-display text-3xl font-bold text-primaryviolet">3,0 MB</span>
+</div>
+</div>
+</div>
+<!-- Barra de Consumo -->
+<div class="flex flex-col gap-2">
+<div class="flex items-center justify-between font-mono text-xs">
+<span class="text-textsecondary uppercase tracking-wider font-semibold">PROPULSOR DE DATOS</span>
+<span class="text-primaryviolet font-bold">2,0 MB LIQUIDADOS</span>
+</div>
+<div class="h-2.5 w-full bg-gray-200/80 rounded-full overflow-hidden p-0.5">
+<div class="h-full rounded-full bg-gradient-to-r from-primaryviolet to-tealbrand w-[40%] transition-all duration-700"></div>
+</div>
+</div>
+</div>
+<!-- Columna Derecha: Saldo y Mensaje del Copiloto AI -->
+<div class="lg:col-span-5 flex flex-col gap-5">
+<!-- Saldo Restante en Tarjeta Blanca -->
+<div class="p-6 rounded-2xl bg-white border border-cardborder shadow-sm flex flex-col gap-1.5">
+<span class="font-mono text-xs font-bold text-textsecondary uppercase tracking-wider">SALDO DISPONIBLE EN WALLET</span>
+<div class="flex items-baseline gap-2">
+<span class="font-display text-5xl font-bold text-textprimary tracking-tight">3,00</span>
+<span class="font-mono text-lg font-bold text-primaryviolet">USDC</span>
+</div>
+<span class="text-xs text-textsecondary mt-1">Custodia descentralizada en Stellar Testnet.</span>
+</div>
+<!-- Mensaje Limpio del Copiloto AI en caja lavanda -->
+<div class="p-6 rounded-2xl bg-[#EEE9FF] border border-primaryviolet/20 flex flex-col gap-2.5 relative">
+<div class="flex items-center gap-2 text-primaryviolet font-mono text-xs font-bold tracking-wider uppercase">
+<span class="material-symbols-outlined text-base">smart_toy</span>
+          COPILOTO AI // REPORTE DE VUELO
+        </div>
+<p class="text-sm text-textprimary italic leading-relaxed">
+          “Tu misión está dentro del presupuesto. Disponés de aproximadamente 3 MB adicionales en esta zona. La conexión se pausará automáticamente si alcanzás el límite para proteger tu saldo.”
+        </p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ESCENA 5: STELLAR & MICROPAGOS -->
+<section class="relative py-24 px-6 md:px-12 bg-[#FAF9F7] border-t border-cardborder overflow-hidden" id="tecnologia">
+<div class="max-w-7xl mx-auto flex flex-col gap-16">
+<div class="flex flex-col items-center text-center gap-3 max-w-3xl mx-auto">
+<span class="font-mono text-xs font-bold text-tealbrand uppercase tracking-widest">[ ARQUITECTURA DE LIQUIDACIÓN DETERMINÍSTICA ]</span>
+<h2 class="font-display text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-textprimary">
+    MICROPAGOS QUE IMPULSAN CADA TRAMO
+  </h2>
+<p class="text-base sm:text-lg text-textsecondary">
+    Un circuito dinámico y auditable donde cada megabyte consumido genera un micropago directo sin fricción ni intermediarios.
+  </p>
+</div>
+<!-- Circuito Visual sobre Tarjeta Blanca Grande -->
+<div class="w-full p-8 md:p-10 rounded-3xl bg-white border border-cardborder shadow-[0_8px_30px_rgba(25,24,29,0.04)] relative overflow-hidden">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5 relative z-10 items-center">
+<!-- Paso 1: Usuario -->
+<div class="flex flex-col items-center text-center p-5 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-primaryviolet hover:shadow-sm transition-all">
+<div class="w-12 h-12 rounded-full bg-white border border-cardborder flex items-center justify-center text-primaryviolet mb-3 shadow-xs">
+<span class="material-symbols-outlined text-2xl">account_circle</span>
+</div>
+<span class="font-mono text-[10px] font-bold text-primaryviolet uppercase tracking-wider">PASO 01</span>
+<span class="font-display text-base font-bold text-textprimary mt-1">USUARIO</span>
+<span class="text-xs text-textsecondary mt-1">Define presupuesto y navega</span>
+</div>
+<!-- Paso 2: Nave ASTROAM -->
+<div class="flex flex-col items-center text-center p-5 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-primaryviolet hover:shadow-sm transition-all">
+<div class="w-12 h-12 rounded-full bg-white border border-cardborder flex items-center justify-center mb-3 shadow-xs p-2">
+<img alt="Nave ASTROAM" class="w-full h-full object-contain" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAMdcFVFRwSrJjDyvg_hVGFgFi2WLWrWgJ0jVJy9G4Od6e83vYSaoCf8Vmwf0nSpCFq578aL5JDC_GoAM7phA5J1T7vXrt2g15HucW75EmmCi0ftngI0NALf9HAX1gclivHU_j3kMEojOClH-g1IMv_XI1Kvaoy18jzmDo6I70lQ6pmh7ZfTWt3Wy-FrjAp6pjE6ovFGBbfr7KPmlzJVo-dNU8eTyc6mAoHO_P04_lji05IA6WacATMBxD8FhOm-IXDQA"/>
+</div>
+<span class="font-mono text-[10px] font-bold text-primaryviolet uppercase tracking-wider">PASO 02</span>
+<span class="font-display text-base font-bold text-textprimary mt-1">NAVE ASTROAM</span>
+<span class="text-xs text-textsecondary mt-1">Firma vouchers en segundo plano</span>
+</div>
+<!-- Paso 3: Checkpoint -->
+<div class="flex flex-col items-center text-center p-5 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-stellar hover:shadow-sm transition-all">
+<div class="w-12 h-12 rounded-full bg-white border border-cardborder flex items-center justify-center text-yellow-500 mb-3 shadow-xs">
+<span class="material-symbols-outlined text-2xl">toll</span>
+</div>
+<span class="font-mono text-[10px] font-bold text-textprimary uppercase tracking-wider">PASO 03</span>
+<span class="font-display text-base font-bold text-textprimary mt-1">CHECKPOINT</span>
+<span class="text-xs text-textsecondary mt-1">Valida consumo byte a byte</span>
+</div>
+<!-- Paso 4: Stellar Soroban -->
+<div class="flex flex-col items-center text-center p-5 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-tealbrand hover:shadow-sm transition-all">
+<div class="w-12 h-12 rounded-full bg-white border border-cardborder flex items-center justify-center text-tealbrand mb-3 shadow-xs">
+<span class="material-symbols-outlined text-2xl">hub</span>
+</div>
+<span class="font-mono text-[10px] font-bold text-tealbrand uppercase tracking-wider">PASO 04</span>
+<span class="font-display text-base font-bold text-textprimary mt-1">RED STELLAR</span>
+<span class="text-xs text-textsecondary mt-1">Liquidación en 5 segundos</span>
+</div>
+<!-- Paso 5: Proveedor de Datos -->
+<div class="flex flex-col items-center text-center p-5 rounded-2xl bg-[#FAF9F7] border border-cardborder hover:border-online hover:shadow-sm transition-all">
+<div class="w-12 h-12 rounded-full bg-white border border-cardborder flex items-center justify-center text-online mb-3 shadow-xs">
+<span class="material-symbols-outlined text-2xl">cell_tower</span>
+</div>
+<span class="font-mono text-[10px] font-bold text-online uppercase tracking-wider">PASO 05</span>
+<span class="font-display text-base font-bold text-textprimary mt-1">PROVEEDOR</span>
+<span class="text-xs text-textsecondary mt-1">Mantiene enlace 4G/5G seguro</span>
+</div>
+</div>
+</div>
+<!-- 4 Pilares Limpios en Tarjetas Blancas -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+<div class="p-6 rounded-2xl bg-white border border-cardborder shadow-xs flex flex-col gap-2">
+<span class="font-mono text-xs text-primaryviolet font-bold tracking-wider">01 // USDC</span>
+<h4 class="font-display text-lg font-bold text-textprimary">Moneda Estable</h4>
+<p class="text-xs text-textsecondary leading-relaxed">Sin fluctuaciones cambiarias ni comisiones bancarias imprevistas durante tu viaje.</p>
+</div>
+<div class="p-6 rounded-2xl bg-white border border-cardborder shadow-xs flex flex-col gap-2">
+<span class="font-mono text-xs text-tealbrand font-bold tracking-wider">02 // MICROPAGOS</span>
+<h4 class="font-display text-lg font-bold text-textprimary">Fracciones Mínimas</h4>
+<p class="text-xs text-textsecondary leading-relaxed">Pagá exactamente por los megabytes que descargás y ni un solo centavo de más.</p>
+</div>
+<div class="p-6 rounded-2xl bg-white border border-cardborder shadow-xs flex flex-col gap-2">
+<span class="font-mono text-xs text-primaryviolet font-bold tracking-wider">03 // FINALIDAD</span>
+<h4 class="font-display text-lg font-bold text-textprimary">Liquidación Rápida</h4>
+<p class="text-xs text-textsecondary leading-relaxed">Consenso en 5 segundos con el costo de transacción más bajo del ecosistema.</p>
+</div>
+<div class="p-6 rounded-2xl bg-white border border-cardborder shadow-xs flex flex-col gap-2">
+<span class="font-mono text-xs text-online font-bold tracking-wider">04 // TRANSPARENCIA</span>
+<h4 class="font-display text-lg font-bold text-textprimary">Registro Verificable</h4>
+<p class="text-xs text-textsecondary leading-relaxed">Auditabilidad total en blockchain para garantizar soberanía sobre tus fondos.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- ESCENA FINAL: PORTAL ESPACIAL Y CTA (REDEFINIDO CLARO Y ELEGANTE) -->
+<section class="relative py-28 px-6 md:px-12 bg-white border-t border-cardborder overflow-hidden group-launch" id="portal">
+<!-- Resplandor circular translúcido y limpio -->
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] pointer-events-none flex items-center justify-center">
+<div class="absolute inset-0 rounded-full border border-primaryviolet/20 animate-portal launch-portal transition-all duration-700"></div>
+<div class="w-[450px] h-[450px] rounded-full border border-tealbrand/20 animate-spin" style="animation-duration: 35s;"></div>
+<div class="w-[320px] h-[320px] rounded-full bg-gradient-to-tr from-primaryviolet/10 via-tealbrand/5 to-transparent blur-2xl"></div>
+</div>
+<div class="max-w-3xl mx-auto flex flex-col items-center text-center gap-6 relative z-10">
+<!-- Nave ASTROAM Isotipo -->
+<div class="w-24 h-24 relative animate-float-ship launch-thrust transition-all duration-500">
+<img alt="Nave ASTROAM" class="w-full h-full object-contain drop-shadow-[0_12px_24px_rgba(105,65,255,0.35)]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCZL1vz9bvtEz3sOy2Rbrl5IsSOrhE0Eyy1PNs-EQEMzIAWtJ8UXedDlT6WVEY9AZ8koomFxtuR4zo5sE3AK0QS7Q7JgbtkGQRGnil5fsc1dkLCOzoQTWayQ8V8CSPfJ1_St0oSxmOj89FdKp64AfCimukCq_D_9T3Lz7jQZtBv6OS9HppuEi59iT6KEeo9NQOHBAUAHIkNqKM6ksOINIwZxTfv1q-oV0FPdprtbK35wC0nOJBq37ByiVuYFNfBXTuqVw"/>
+</div>
+<div class="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-[#EEE9FF] border border-primaryviolet/30 font-mono text-xs font-bold text-primaryviolet tracking-widest uppercase">
+<span class="w-2 h-2 rounded-full bg-primaryviolet animate-pulse"></span>
+    PORTAL HIPERLUMÍNICO ACTIVO
+  </div>
+<h2 class="font-display text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-textprimary leading-tight">
+    TU PRÓXIMA MISIÓN<br/>
+<span class="text-primaryviolet">ESTÁ LISTA.</span>
+</h2>
+<p class="text-base sm:text-lg text-textsecondary max-w-xl font-normal leading-relaxed">
+    Elegí tu destino, cargá saldo y mantenete conectado desde el momento en que aterrizás. La era del roaming obsoleto quedó en el pasado.
+  </p>
+<!-- Botón Pill Violeta Imponente -->
+<div class="pt-2">
+<button class="px-10 py-4 rounded-full bg-primaryviolet text-white font-sans text-base font-bold tracking-wider uppercase shadow-[0_6px_20px_rgba(105,65,255,0.4)] hover:bg-primaryviolet-hover hover:scale-105 hover:shadow-[0_10px_28px_rgba(105,65,255,0.5)] active:scale-95 transition-all duration-200 flex items-center gap-3" type="button">
+<span class="material-symbols-outlined text-xl">rocket_launch</span>
+<span>INICIAR MISIÓN AHORA</span>
+</button>
+</div>
+<div class="flex flex-wrap items-center justify-center gap-6 font-mono text-xs text-textsecondary uppercase tracking-widest pt-4">
+<span>SIN CONTRATOS</span>
+<span>·</span>
+<span>SIN CARGOS SORPRESA</span>
+<span>·</span>
+<span>100% STELLAR</span>
+</div>
+</div>
+</section>
+</main>
+<!-- FOOTER LIMPIO Y ESPACIOSO -->
+<footer class="relative z-10 border-t border-cardborder bg-[#F4F2F1] py-10 px-6 md:px-12">
+<div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+<div class="flex items-center gap-3.5">
+<img alt="ASTROAM" class="h-6 object-contain" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCNAMpThrq_6bl2l9LwHwTTW8lbZ7uh1cw7FXNEXfweqja1U-bbcpXNG7GKM3GS370NdUTR2DB63y4-4pA1Nr51ssaID8rJ-i17q190VF3G6apunrBguk_g2rTB1m9HCmA5dC5oWemjeBdzTLKvW_iv7sFt3NpfTtX9051DKuUMJPqhbMuMU_xBa6bP4pGpfoWlpX8JfGk5QGtho2tAgqmjwjj0ouZGvf6SsPytj8BxuwJ0PHNqicTPucLwIrGCecPuww"/>
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white border border-cardborder text-[10px] font-mono text-online font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-online"></span>
+      RED ACTIVA
+    </span>
+</div>
+<p class="text-xs text-textsecondary text-center md:text-left">
+    Conectividad soberana sin fronteras. Diseñado sobre Stellar Soroban y red Telnyx.
+  </p>
+<div class="flex items-center gap-6 font-mono text-xs text-textsecondary">
+<a class="hover:text-primaryviolet transition-colors" href="#como-funciona">CÓMO FUNCIONA</a>
+<a class="hover:text-primaryviolet transition-colors" href="#tecnologia">TECNOLOGÍA</a>
+<a class="hover:text-primaryviolet transition-colors" href="#cabina">CABINA</a>
+</div>
+</div>
+</footer>
+</body></html>

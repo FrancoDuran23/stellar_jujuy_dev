@@ -24,6 +24,7 @@ import {
   isStellarContractId,
   isStellarSecretSeed,
 } from "../shared/stellar/keys.ts";
+import { arePricesAligned, pricePerMibFromPerMbRaw } from "../shared/money.ts";
 
 const DEFAULT_USDC_SAC_CONTRACT = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
 const DEFAULT_SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
@@ -139,6 +140,27 @@ const serverSchema = sharedSchema.extend({
   CLOSE_ASSERT_INTERVAL_MS: z.coerce.number().int().min(1).default(2500),
   INIT_RETRY_INTERVAL_MS: z.coerce.number().int().min(1).default(10000),
   RPC_HEALTH_TIMEOUT_MS: z.coerce.number().int().min(1).default(2000),
+  // Connectivity layer — Citrus backend (docs/citrus-mobile-spec.md v2, R1/R12).
+  // `fake` is the default so the server, tests and demos run with no Citrus
+  // config; `citrus` fails fast at close-session/boot gate naming the missing
+  // variable. All secret-ish values are `emptyToUndefined`: a bare `KEY=` in
+  // `.env` behaves like an omitted line.
+  CONNECTIVITY_PROVIDER: z.enum(["fake", "citrus"]).default("fake"),
+  CITRUS_API_KEY: emptyToUndefined(z.string().min(1).optional()),
+  CITRUS_BASE_URL: emptyToUndefined(z.url().optional()),
+  CITRUS_WEBHOOK_SECRET: emptyToUndefined(z.string().min(1).optional()),
+  CITRUS_REQUEST_TIMEOUT_MS: emptyToUndefined(z.coerce.number().int().min(1000).optional()),
+  // Same tariff as PRICE_PER_MIB_RAW, expressed per decimal MB (R12; aligned
+  // below, and enforced by IntegratedMeterService at construction too).
+  PRICE_PER_MB_RAW: emptyToUndefined(rawPositiveIntegerRaw().optional()),
+  // Usage loop / funding / closing economics (spec §5/§6.2), all basis points
+  // or milliseconds with defaults matching the spec's worked examples.
+  MARKUP_BPS: z.coerce.number().int().min(1).default(15000),
+  USDC_USD_RATE_BPS: z.coerce.number().int().min(1).default(10000),
+  USAGE_POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(600000),
+  CITRUS_UNPAID_CAP_BPS: z.coerce.number().int().min(0).max(10000).default(1000),
+  CITRUS_DEFUND_STABLE_WINDOW_MS: z.coerce.number().int().min(0).default(300000),
+  CITRUS_DEFUND_TIMEOUT_MS: z.coerce.number().int().min(1000).default(3600000),
 })
   // Stage-2 gate (WU6/WU7 deviation, documented in docs/sdd/payments-mpp.md
   // §6, Lote E): the design left "stage 2 only" as a comment on individual
@@ -161,6 +183,29 @@ const serverSchema = sharedSchema.extend({
         code: "custom",
         path: ["FUNDER_ACCOUNT"],
         message: "FUNDER_ACCOUNT is required once CHANNEL_CONTRACT is set (stage 2)",
+      });
+    }
+  })
+  // Connectivity gates (R12): the citrus backend needs the per-MB price (its
+  // only pricing knob — the loop/meter/funding all read it), and when one is
+  // present it must be the SAME tariff as the agent's per-MiB price or the
+  // two processes disagree on when the channel runs out.
+  .superRefine((value, ctx) => {
+    if (value.CONNECTIVITY_PROVIDER === "citrus" && value.PRICE_PER_MB_RAW === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["PRICE_PER_MB_RAW"],
+        message: "PRICE_PER_MB_RAW is required with CONNECTIVITY_PROVIDER=citrus",
+      });
+    }
+    if (
+      value.PRICE_PER_MB_RAW !== undefined &&
+      !arePricesAligned(value.PRICE_PER_MB_RAW, value.PRICE_PER_MIB_RAW)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["PRICE_PER_MB_RAW"],
+        message: `PRICE_PER_MB_RAW must be the same tariff as PRICE_PER_MIB_RAW (expected MiB price ${pricePerMibFromPerMbRaw(value.PRICE_PER_MB_RAW)})`,
       });
     }
   });
