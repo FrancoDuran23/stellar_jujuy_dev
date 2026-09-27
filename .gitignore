@@ -16,3 +16,5 @@ frontend/dist/
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+# TypeScript incremental build info
+*.tsbuildinfo
