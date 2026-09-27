@@ -32,6 +32,10 @@ export const ORIGIN = { id: 'argentina', name: 'Argentina', flag: '🇦🇷' }
 export const PRICE_PER_MIB_RAW = 10_000_000n   // 1 USDC/MiB in raw units (demo)
 export const STELLAR_NETWORK = 'stellar:testnet'
 
+/** MB que consume cada toque de "TRÁFICO" en la demo: a 0,0025 USDC/MB son
+ * 0,625 USDC, así 5 USDC en Brasil se agotan en 8 toques. */
+export const DEMO_TRAFFIC_MB = 250
+
 /** How many MB a given USDC budget buys at the destination's price */
 export function estimateMb(budgetUsdc: number, pricePerMbUsdc?: number): number {
   if (!pricePerMbUsdc || pricePerMbUsdc <= 0) return 0

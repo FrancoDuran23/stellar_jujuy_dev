@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { envConfig } from '../config/env'
 import { demoMissionService } from '../services/DemoMissionService'
 import { apiMissionService } from '../services/ApiMissionService'
+import { DEMO_TRAFFIC_MB } from '../utils/missionUtils'
 import type {
   BackendCapabilities,
   FinishResult,
@@ -260,7 +261,7 @@ export function useMission() {
       setMission(newState.mission)
       setEvents(newState.events)
     } else {
-      await apiMissionService.triggerDemoTraffic(mission.id, 500_000)
+      await apiMissionService.triggerDemoTraffic(mission.id, DEMO_TRAFFIC_MB * 1_000_000)
       const fresh = await apiMissionService.getMission(mission.id)
       setMission(fresh)
     }
