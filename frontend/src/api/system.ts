@@ -1,4 +1,7 @@
-const BASE = '/api'
+import { envConfig } from '../config/env'
+
+// /health y /ready viven en la raíz del backend, no bajo /api.
+const BASE = envConfig.apiBaseUrl.replace(/\/api$/, '')
 
 export type HealthResponse = { status: 'alive' }
 

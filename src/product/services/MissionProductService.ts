@@ -9,7 +9,26 @@ import type { ChannelPort } from '../../agent/channel.ts'
 import { createConnectivitySession, type ConnectivitySession } from '../../models/ConnectivitySession.ts'
 import { runReconciliation } from '../../jobs/reconciliation.ts'
 import type { Network } from '../../shared/stellar/network.ts'
-import { pricePerMibFromPerMbRaw } from '../../shared/money.ts'
+import { parseNonNegativeIntegerRaw, pricePerMibFromPerMbRaw } from '../../shared/money.ts'
+import { createHash } from 'node:crypto'
+import { StrKey } from '@stellar/stellar-sdk'
+
+/** USDC (número) a raw units (1e-7 USDC). */
+function usdcToRaw(usdc: number): bigint {
+  return BigInt(Math.round(usdc * 1e7))
+}
+
+/** Variable de entorno raw no vacía, o `undefined`. */
+function envRaw(key: string): bigint | undefined {
+  const value = process.env[key]
+  return value ? parseNonNegativeIntegerRaw(value) : undefined
+}
+
+/** Contrato de canal con formato válido (C…, 56 chars) derivado de la misión,
+ * para el modo sin canal real: el agente de pagos rechaza cualquier otro formato. */
+function demoChannelId(missionId: string): string {
+  return StrKey.encodeContract(createHash('sha256').update(`astroam-demo-channel:${missionId}`).digest())
+}
 
 export type MissionProductServiceOptions = {
   repo: MissionRepository
@@ -18,6 +37,9 @@ export type MissionProductServiceOptions = {
   citrus?: ConnectivityProvider
   telnyx?: ConnectivityProvider
   voucherPort?: VoucherPort
+  /** Sin agente real: crea un agente de pagos simulado por misión, con el
+   * depósito de esa misión (leído en cada pedido, para reflejar recargas). */
+  createOfflineVoucherPort?: (depositRaw: () => bigint) => VoucherPort
   balancePort?: ChannelBalancePort
   channelPort?: ChannelPort
   hasCitrusReal?: boolean
@@ -32,6 +54,7 @@ export class MissionProductService {
   private cosmoPay: CosmoPayService
   private connectivity: ConnectivityProvider
   private voucherPort?: VoucherPort
+  private createOfflineVoucherPort?: (depositRaw: () => bigint) => VoucherPort
   private balancePort?: ChannelBalancePort
   private channelPort?: ChannelPort
   private hasCitrusReal: boolean
@@ -42,6 +65,8 @@ export class MissionProductService {
   // Active sessions & meter services per mission
   private sessions = new Map<string, ConnectivitySession>()
   private meters = new Map<string, IntegratedMeterService>()
+  // Presupuesto vigente de cada misión en raw units (se actualiza en cada lectura)
+  private depositsRaw = new Map<string, bigint>()
 
   constructor(options: MissionProductServiceOptions) {
     this.repo = options.repo
@@ -52,6 +77,7 @@ export class MissionProductService {
     }
     this.connectivity = conn
     this.voucherPort = options.voucherPort
+    this.createOfflineVoucherPort = options.createOfflineVoucherPort
     this.balancePort = options.balancePort
     this.channelPort = options.channelPort
     this.hasCitrusReal = options.hasCitrusReal ?? options.hasTelnyxReal ?? false
@@ -68,7 +94,7 @@ export class MissionProductService {
     const missing: string[] = []
     if (!process.env.COSMOS_PAY_API_KEY) missing.push('COSMOS_PAY_API_KEY')
     if (!process.env.CITRUS_API_KEY) missing.push('CITRUS_API_KEY')
-    if (!process.env.PRICE_PER_MB_RAW && !process.env.TELNYX_PRICE_PER_MB_USDC) missing.push('PRICE_PER_MB_RAW')
+    if (!process.env.PRICE_PER_MB_RAW) missing.push('PRICE_PER_MB_RAW')
     if (!process.env.CHANNEL_CONTRACT) missing.push('CHANNEL_CONTRACT')
     if (!process.env.AGENT_VOUCHERS_URL) missing.push('AGENT_VOUCHERS_URL')
     if (!process.env.GATEWAY_TOKEN) missing.push('GATEWAY_TOKEN')
@@ -282,7 +308,7 @@ export class MissionProductService {
     }
 
     const esimRecord = await this.connectivity.provisionEsim(mission.userId)
-    const channelId = mission.channelId || process.env.CHANNEL_CONTRACT || `SOROBAN-CHANNEL-${Date.now().toString(16).toUpperCase()}`
+    const channelId = mission.channelId || process.env.CHANNEL_CONTRACT || demoChannelId(mission.id)
 
     const publicEsim: PublicEsimInfo = {
       iccid: esimRecord.iccid,
@@ -552,21 +578,30 @@ export class MissionProductService {
         id: `ses_${mission.id}`,
         userId: mission.userId,
         iccid: mission.iccid || `iccid_${mission.id}`,
-        channelId: mission.channelId || process.env.CHANNEL_CONTRACT || `channel_${mission.id}`,
+        channelId: mission.channelId || process.env.CHANNEL_CONTRACT || demoChannelId(mission.id),
       })
       this.sessions.set(mission.id, session)
     }
 
-    const pricePerMbRaw = BigInt(process.env.PRICE_PER_MB_RAW || process.env.TELNYX_PRICE_PER_MB_USDC || 10000000)
-    const voucherPricePerMibRaw = BigInt(process.env.PRICE_PER_MIB_RAW || pricePerMibFromPerMbRaw(pricePerMbRaw).toString())
+    // Tarifa: PRICE_PER_MB_RAW si está definida; si no, la del destino (la
+    // misma que muestra la app). Los vales cobran la misma tarifa por MiB,
+    // salvo con el agente real, que tiene su propio PRICE_PER_MIB_RAW.
+    const pricePerMbRaw = envRaw('PRICE_PER_MB_RAW') ?? usdcToRaw(mission.destination.pricePerMbUsdc)
+    const voucherPricePerMibRaw = (this.hasVoucherAgentReal ? envRaw('PRICE_PER_MIB_RAW') : undefined)
+      ?? pricePerMibFromPerMbRaw(pricePerMbRaw)
+
+    const missionId = mission.id
+    this.depositsRaw.set(missionId, usdcToRaw(mission.budgetUsdc))
+    const depositRaw = () => this.depositsRaw.get(missionId) ?? 0n
 
     const balancePort: ChannelBalancePort = this.balancePort || {
       async getChannelBalance() {
-        return BigInt(Math.round(mission.budgetUsdc * 1e7))
+        return depositRaw()
       },
     }
 
-    if (!this.voucherPort) {
+    const voucherPort = this.voucherPort ?? this.createOfflineVoucherPort?.(depositRaw)
+    if (!voucherPort) {
       throw new Error('VoucherPort no inyectado en MissionProductService')
     }
 
@@ -574,7 +609,7 @@ export class MissionProductService {
       session,
       provider: this.connectivity,
       balancePort,
-      voucherPort: this.voucherPort,
+      voucherPort,
       network: this.network,
       pricePerMbRaw,
       voucherPricePerMibRaw,
@@ -603,6 +638,7 @@ export class MissionProductService {
     }
 
     const meterService = this.getOrCreateMeterService(mission)
+    this.depositsRaw.set(mission.id, usdcToRaw(mission.budgetUsdc))
     const result = await meterService.processTraffic(bytes)
 
     const currentBytes = BigInt(mission.meteredBytes || '0') + BigInt(bytes)

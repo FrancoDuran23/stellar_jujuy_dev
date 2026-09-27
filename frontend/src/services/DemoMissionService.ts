@@ -13,12 +13,13 @@ import {
   randomHex,
   daysBetween,
   STELLAR_NETWORK,
+  DEMO_TRAFFIC_MB,
 } from '../utils/missionUtils'
 
 const STORAGE_KEY = 'astroam:missionState'
 
 // MB consumed per simulated click
-const CONSUME_MB_STEP = 0.5
+const CONSUME_MB_STEP = DEMO_TRAFFIC_MB
 
 function emptyState(): MissionState {
   return { mission: null, events: [] }

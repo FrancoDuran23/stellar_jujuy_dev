@@ -287,8 +287,9 @@ export function createAgentVoucherPort(
 // ---------------------------------------------------------------------------
 
 export type InMemoryVoucherPortOptions = {
-  /** Depósito del canal en raw units (1e-7 USDC). */
-  depositRaw: bigint;
+  /** Depósito del canal en raw units (1e-7 USDC). Una función se lee en
+   * cada pedido, para que una recarga del canal se refleje sin recrear el doble. */
+  depositRaw: bigint | (() => bigint);
   /** Etiqueta para la firma falsa determinística. NO es un secreto. */
   seed?: string;
   now?: () => Date;
@@ -308,6 +309,8 @@ export function createInMemoryVoucherPort(options: InMemoryVoucherPortOptions): 
   const seed = options.seed ?? "meter-demo-fake-voucher";
   const now = options.now ?? (() => new Date());
   const commitmentPubkey = createHash("sha256").update(`${seed}:commitment-pubkey`).digest("hex");
+  const { depositRaw } = options;
+  const deposit = typeof depositRaw === "function" ? depositRaw : () => depositRaw;
   let highest: { amountRaw: bigint; signature: string; signedAt: string } | undefined;
 
   function signed(m1: Message1, channel: string, reused: boolean): Message2 {
@@ -324,7 +327,7 @@ export function createInMemoryVoucherPort(options: InMemoryVoucherPortOptions): 
       },
       meterReadingId: m1.meterReadingId,
       reused,
-      remaining: clampMin0(options.depositRaw - highest!.amountRaw).toString(),
+      remaining: clampMin0(deposit() - highest!.amountRaw).toString(),
       signedAt: highest!.signedAt,
     });
   }
@@ -348,18 +351,18 @@ export function createInMemoryVoucherPort(options: InMemoryVoucherPortOptions): 
         return buildUnsigned("stale_reading", {
           sessionId: m1.sessionId,
           channel,
-          remaining: clampMin0(options.depositRaw - previousRaw).toString(),
+          remaining: clampMin0(deposit() - previousRaw).toString(),
           meterReadingId: m1.meterReadingId,
           detail: `cumulativeAmount ${amountRaw} is lower than the highest signed amount ${highest.amountRaw}`,
         }).body;
       }
-      if (amountRaw > options.depositRaw) {
+      if (amountRaw > deposit()) {
         return buildUnsigned("channel_exhausted", {
           sessionId: m1.sessionId,
           channel,
-          remaining: clampMin0(options.depositRaw - previousRaw).toString(),
+          remaining: clampMin0(deposit() - previousRaw).toString(),
           meterReadingId: m1.meterReadingId,
-          detail: `requested cumulative ${amountRaw} exceeds channel deposit ${options.depositRaw}`,
+          detail: `requested cumulative ${amountRaw} exceeds channel deposit ${deposit()}`,
         }).body;
       }
 

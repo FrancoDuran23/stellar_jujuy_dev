@@ -42,7 +42,9 @@ export function bootProductService(env: Record<string, string | undefined> = pro
   }
 
   // 1. VoucherPort
-  let voucherPort: VoucherPort
+  // Sin agente real, cada misión recibe su propio agente simulado
+  // (createOfflineVoucherPort), con el depósito de esa misión.
+  let voucherPort: VoucherPort | undefined
   let hasVoucherAgentReal = false
   const agentUrl = env.AGENT_VOUCHERS_URL
 
@@ -55,14 +57,8 @@ export function bootProductService(env: Record<string, string | undefined> = pro
       voucherPort = withVoucherRetry(rawPort)
       hasVoucherAgentReal = true
     } catch {
-      voucherPort = createInMemoryVoucherPort({
-        depositRaw: 100_000_000n,
-      })
+      voucherPort = undefined
     }
-  } else {
-    voucherPort = createInMemoryVoucherPort({
-      depositRaw: 100_000_000n,
-    })
   }
 
   // 2. ChannelState & BalancePort
@@ -111,6 +107,7 @@ export function bootProductService(env: Record<string, string | undefined> = pro
     cosmoPay,
     connectivity,
     voucherPort,
+    createOfflineVoucherPort: (depositRaw) => createInMemoryVoucherPort({ depositRaw }),
     balancePort,
     channelPort,
     hasCitrusReal,
