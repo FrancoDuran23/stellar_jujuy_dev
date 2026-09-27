@@ -106,12 +106,12 @@ export default function EsimSetupPage() {
               className="w-56 h-56 sm:w-60 sm:h-60 object-contain rounded-lg max-w-full"
             />
             {isDemo && (
-              <div className="absolute inset-0 bg-bgdark/80 backdrop-blur-xs rounded-2xl flex flex-col items-center justify-center p-3 text-center">
+              <div className="absolute inset-0 bg-textprimary/85 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center p-3 text-center">
                 <span className="material-symbols-outlined text-tealbrand text-3xl mb-1">qr_code_2</span>
                 <span className="font-mono text-xs font-bold text-white uppercase tracking-wider">
                   QR SIMULADO
                 </span>
-                <span className="font-sans text-[11px] text-textsecondary mt-1">
+                <span className="font-sans text-[11px] text-white/70 mt-1">
                   Usá el código LPA en modo demo
                 </span>
               </div>
