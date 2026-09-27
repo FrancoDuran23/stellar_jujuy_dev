@@ -14,6 +14,7 @@ export default function ActiveMissionPage() {
     mission,
     events,
     caps,
+    loading,
     actionLoading,
     isDemoMode,
     simulate,
@@ -29,12 +30,12 @@ export default function ActiveMissionPage() {
   const [error, setError] = useState<string | null>(null)
   const [showTechDetails, setShowTechDetails] = useState(false)
 
-  // Redirect if no mission
+  // Redirect if no mission (once it has finished loading from the backend)
   useEffect(() => {
-    if (!mission && !isDemoMode) {
+    if (!loading && !mission && !isDemoMode) {
       navigate('/mission/new', { replace: true })
     }
-  }, [mission, isDemoMode, navigate])
+  }, [loading, mission, isDemoMode, navigate])
 
   if (!mission) return null
 
