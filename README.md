@@ -152,6 +152,21 @@ Demos, sin red ni claves:
   `AGENT_VOUCHERS_URL` usa el agente de pagos real.
 - `npm run demo:cosmopay`: el mismo flujo, fondeado con CosmoPay.
 
+### App completa (para grabar la demo)
+
+Sin claves: eSIM simulada, pago con CosmoPay simulado y un agente de pagos
+simulado por misión que firma vales reales en formato.
+
+1. `cp .env.example .env` (sin cambios alcanza).
+2. `npm run server`: backend en `http://localhost:8080`.
+3. En otra terminal: `cd frontend && npm install && npm run dev`, y abrir
+   `http://localhost:5173`. No crees `frontend/.env`: sin
+   `VITE_API_BASE_URL`, Vite reenvía `/api` al backend.
+
+Cada destino cobra su propia tarifa (Brasil 0,0025 USDC/MB). Con 5 USDC en
+Brasil alcanzan 2.000 MB; el tráfico de prueba se inyecta desde la misión
+activa (`ENABLE_DEMO_TRAFFIC=true`).
+
 Servidor, agente y canal en testnet: ver
 [`docs/payments-mpp-operacion.md`](docs/payments-mpp-operacion.md).
 
