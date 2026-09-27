@@ -123,18 +123,21 @@ export function useMission() {
     }
   }
 
-  const createPaymentIntent = async (): Promise<PaymentIntentInfo> => {
-    if (!mission) throw new Error('No hay misión activa')
+  // `target`: la misión recién creada. El estado `mission` de este render
+  // todavía no la tiene cuando se llama justo después de createMission.
+  const createPaymentIntent = async (target?: Mission): Promise<PaymentIntentInfo> => {
+    const current = target ?? mission
+    if (!current) throw new Error('No hay misión activa')
     if (isDemoMode) {
       return {
         intentId: `intent_demo_${Date.now()}`,
-        amount: mission.budgetUsdc.toString(),
+        amount: current.budgetUsdc.toString(),
         asset: 'USDC',
         status: 'pending',
         isMock: true,
       }
     }
-    return apiMissionService.createPaymentIntent(mission.id)
+    return apiMissionService.createPaymentIntent(current.id)
   }
 
   const confirmPayment = async (intentId: string, txHash: string): Promise<PaymentConfirmationResult> => {

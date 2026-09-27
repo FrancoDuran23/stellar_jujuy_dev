@@ -89,8 +89,8 @@ export default function MissionSetupPage() {
         if (!caps || !caps.backendAvailable) {
           throw new Error('Servidor backend no disponible. Verificá la conexión.')
         }
-        await createMission(data)
-        const intent = await createPaymentIntent()
+        const created = await createMission(data)
+        const intent = await createPaymentIntent(created)
         setPaymentIntent(intent)
       }
     } catch (e) {

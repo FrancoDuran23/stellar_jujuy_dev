@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { Client, Assets } from '@cosmosapp/pay_sdk';
+import { fakeQrDataUri } from '../shared/fake-qr.ts';
 
 export interface DepositIntentOptions {
   amount: string;
@@ -93,7 +94,7 @@ export class CosmoPayService {
     // --- Mock / Sandbox Mode ---
     const mockId = `intent_mock_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const mockUri = `web+stellar:pay?destination=${destination}&amount=${amount}&asset_code=${assetStr}&memo=${encodeURIComponent(msg)}`;
-    const mockQr = `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==`;
+    const mockQr = fakeQrDataUri(mockUri);
 
     return {
       id: mockId,
