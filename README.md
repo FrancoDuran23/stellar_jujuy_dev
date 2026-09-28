@@ -7,7 +7,7 @@ medida que navega, un agente firma vales acumulativos por lo consumido, sin
 una transacción por cada MB. Al cerrar, el servidor cobra con el último vale
 en una sola transacción y el resto del depósito vuelve al viajero.
 
-[Landing](https://bright-figolla-0a9725.netlify.app/) · [Qué hace](#qué-hace) · [Evidencia en testnet](#uso-real-en-testnet) · [Correrlo local](#correrlo-local)
+[Landing](https://bright-figolla-0a9725.netlify.app/) · [Video](#video-de-presentación) · [Qué hace](#qué-hace) · [Evidencia en testnet](#uso-real-en-testnet) · [Correrlo local](#correrlo-local)
 
 Hackatón **Stellar Apex**, equipo AstroAm: [@FrancoDuran23](https://github.com/FrancoDuran23),
 [@DanielPalermoo](https://github.com/DanielPalermoo), [@ignaMartin22](https://github.com/ignaMartin22),
@@ -27,6 +27,14 @@ testnet; la app corre de punta a punta con eSIM y pagos simulados (ver
     <td>Destino y tarifa</td><td>Depósito USDC</td><td>eSIM</td><td>Consumo</td><td>Corte al agotar</td>
   </tr>
 </table>
+
+## Video de presentación
+
+Presentación y demostración de AstroAm para la hackatón de Stellar. En el video se detalla el problema del roaming tradicional, la arquitectura basada en canales de pago en Soroban con micropagos en USDC por MB consumido y el recorrido de la aplicación de punta a punta.
+
+[![Video de presentación de AstroAm](https://img.youtube.com/vi/f3AqEcRCN2g/hqdefault.jpg)](https://youtu.be/f3AqEcRCN2g)
+
+Ver en YouTube: [https://youtu.be/f3AqEcRCN2g](https://youtu.be/f3AqEcRCN2g)
 
 ## Qué hace
 
